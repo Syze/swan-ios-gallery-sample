@@ -37,7 +37,46 @@ final class ViewController: UIViewController {
 
     /// Brand styling and wording, passed through as `config`: `style` becomes CSS
     /// variables, `content` replaces text. Every value is optional and unvalidated.
-    static let theme: [String: Any] = [:]
+    /// Headline, body, button, and footer map to `headingTitle`, `subHeadingTitle`,
+    /// `buttonText`, and `footerText`. The review screen is `pickerPage`.
+    static let theme: [String: Any] = [
+        "content": [
+            "galleryPick": [
+                "introPage": [
+                    "headingTitle": "Create your Muse.",
+                    "subHeadingTitle": "Take a selfie and we’ll find photos of you to measure from. Then see anything on you, in your size.",
+                    "buttonText": "Start",
+                    "footerText": "About a minute. Nothing leaves your phone until you approve it.",
+                ],
+                "selfiePage": [
+                    "headingTitle": "First, a quick selfie.",
+                    "subHeadingTitle": "We use it to find photos of you on this phone. It stays on your phone.",
+                    "buttonText": "Use this photo",
+                    "footerText": "Next, your phone will ask for photo access. Choose Allow Full Access so we can search your library. The search runs on your phone.",
+                    // Second footnote under the button. Cleared so it does not repeat the line above.
+                    "permissionText": "",
+                ],
+                "searchingPage": [
+                    "headingTitle": "Finding photos of you.",
+                    "subHeadingTitle": "We're looking for a selfie and clear, full-length photos from the front and side.",
+                ],
+                "pickerPage": [
+                    "scanningHeadingTitle": "Finding photos of you.",
+                    "scanningSubHeadingTitle": "We're looking for a selfie and clear, full-length photos from the front and side.",
+                    "scanningStatusText": "Found",
+                    "headingTitle": "Here's what we picked.",
+                    "subHeadingTitle": "We'll measure you from these. Swap any you'd rather not use.",
+                    "buttonText": "Build my Muse",
+                ],
+                "common": [
+                    // Footer on the searching screen, and again while the grid is still filling.
+                    "keepAppOpenNote": "",
+                    "poweredBy": "",
+                    "notUploadedNote": "Keep the app open. Nothing has been uploaded."
+                ],
+            ] as [String: Any],
+        ] as [String: Any],
+    ]
 
     // Example values for both halves, with every text key, are in
     // GALLERY_PICK.md and GALLERY_PICK_TEXT_CONFIG.md.

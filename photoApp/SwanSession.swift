@@ -17,8 +17,8 @@ enum SwanSessionConfig {
     /// The API the token is minted on. It must be the environment the web bundle
     /// talks to (`API_BASE_URL` in the package), or every upload is refused.
     static let apiBase = URL(string: "https://develop.api.swanvision.ai")!
-    static let publishableKey = "sw_pk_your_publishable_key"
-    static let secretKey = "sw_sk_your_secret_key"
+    static let publishableKey = "sw_pk_6ceee992d2964a4088aba4577ebc802a"
+    static let secretKey = "sw_sk_5f85098a56fd439fae417a672cf71763"
 
     /// A token this close to expiry counts as gone, so a scan does not start on a
     /// token that dies during the upload.
