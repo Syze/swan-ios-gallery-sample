@@ -17,6 +17,7 @@ enum SwanSessionConfig {
     /// The API the token is minted on. It must be the environment the web bundle
     /// talks to (`API_BASE_URL` in the package), or every upload is refused.
     static let apiBase = URL(string: "https://develop.api.swanvision.ai")!
+    // Swan's development keys, for trying the sample. Replace them with your own.
     static let publishableKey = "sw_pk_6ceee992d2964a4088aba4577ebc802a"
     static let secretKey = "sw_sk_5f85098a56fd439fae417a672cf71763"
 
@@ -165,7 +166,7 @@ enum SwanSessionClient {
 final class SwanSessionViewController: UIViewController, UITextFieldDelegate {
     var onSignedIn: ((SwanSession) -> Void)?
 
-    /// A session that is still valid, shown first so a tester taps once.
+    /// A session that is still valid, shown first so the user taps once.
     private let existing: SwanSession?
 
     private let title_ = UILabel()
@@ -247,7 +248,7 @@ final class SwanSessionViewController: UIViewController, UITextFieldDelegate {
 
         spinner.hidesWhenStopped = true
 
-        // Which API this signs into, so a tester never wonders which keys ran.
+        // Which API this signs into, so nobody wonders which keys ran.
         let footer = UILabel()
         footer.text = "Signs in to \(SwanSessionConfig.apiBase.host ?? "Swan"). The session is kept on this phone until it expires."
         footer.font = .preferredFont(forTextStyle: .caption1)

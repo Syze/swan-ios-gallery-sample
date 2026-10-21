@@ -19,14 +19,17 @@ ones. Open it, add your keys, run it on a device.
    expression reader uses.
 2. Open **`photoApp.xcworkspace`**, not the `.xcodeproj`. The pod is linked only
    through the workspace.
-3. In `photoApp/SwanSession.swift`, put your publishable and secret key into
-   `SwanSessionConfig`. In a shipped app the session token comes from your own
-   server and the keys never ship; the sample mints it on the device to keep
-   the setup short.
+3. `photoApp/SwanSession.swift` ships with Swan's development keys in
+   `SwanSessionConfig`, so the sample runs as it is against the development
+   environment. Replace them with your own keys for your environment. In a
+   shipped app the session token comes from your own server and the keys
+   never ship; the sample mints it on the device to keep the setup short.
 4. In `photoApp/ViewController.swift`, check `sdkURL` points at the Swan page
    for your environment, and set `shopDomain`, `userGender` and
    `userHeightCm` for the shopper.
-5. Select your team under Signing & Capabilities, pick your device, run.
+5. Under Signing & Capabilities, replace the development team and bundle
+   identifier with your own, pick your device, run. The project carries Swan's
+   team id and the bundle id `com.ios.swan`, which will not sign for you.
 
 ## What is in here
 

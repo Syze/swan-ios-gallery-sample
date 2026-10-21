@@ -15,7 +15,7 @@ final class ViewController: UIViewController {
 
     /// Where the SDK bundle is served from. Must be **https** — getUserMedia needs
     /// a secure context, so an http or file:// URL gives no camera.
-    let sdkURL = URL(string: "https://d3fujk4qpp9eu4.cloudfront.net/swan-mobile")!
+    let sdkURL = URL(string: "https://d3fujk4qpp9eu4.cloudfront.net/index.html")!
 
     static let bridgeName = "swanBridge"
 
@@ -108,6 +108,8 @@ final class ViewController: UIViewController {
 
     /// Face measurements from the last photo `matchPerson` looked at, for `ScanEval`.
     /// Only filled in eval mode, since the quality number costs an extra Vision pass.
+    /// How many selfie frames went into the reference — see `blendReferenceFrames`.
+    var lastReferenceBlended = 1
     var lastFaceMetrics: FaceMetrics?
 
     /// Whether the last photo `matchPerson` scored had its face re-cropped from a
@@ -128,6 +130,18 @@ final class ViewController: UIViewController {
 
     /// What the second head-to-toe check found, when `matchPerson` ran one — see
     /// the full-body gate there. Nil when no retry happened. Read by the scan log.
+    /// Where a scan's time goes, in milliseconds per stage: load, detect, group,
+    /// pose, embed, score. Reset per scan, printed in the summary. Scan queue only.
+    var stageMs: [String: Double] = [:]
+    func timed<T>(_ stage: String, _ work: () -> T) -> T {
+        let started = Date()
+        defer { stageMs[stage, default: 0] += Date().timeIntervalSince(started) * 1000 }
+        return work()
+    }
+
+    /// The last `matchPerson` decided "no match" from the face alone, before body
+    /// pose — see `matchBeforePose`. Counted by the scan.
+    var lastEarlyNoMatch = false
     var lastBodyRetry: (note: String, rescued: Bool)?
 
     /// How many faces in the last photo examined were the shopper's. Above 1 it was
@@ -176,6 +190,8 @@ final class ViewController: UIViewController {
 
     /// One console line per photo scanned. Useful on a small library, a flood on
     /// a real one — a 10k-photo scan prints 10k lines.
+    /// One console line per photo scanned. Useful on a small library, a flood on
+    /// a real one — a 10k-photo scan prints 10k lines.
     static let verboseLogging = false
 
     /// Measures matching against a hand-labelled album and prints the result after
@@ -196,6 +212,17 @@ final class ViewController: UIViewController {
 
     /// Echoes the SDK's API trace and callback bodies to the console. **Keep off in
     /// a shipped app:** they carry presigned URLs, the user's email and render links.
+    /// Echoes the SDK's own API and socket trace, and the bodies of its callbacks,
+    /// into the Xcode console.
+    ///
+    /// **Turn this off before you ship.** Those lines carry presigned S3 URLs with
+    /// their signature and security token, the user's email address, and 24-hour
+    /// links to their finished renders. On a device you are holding that is
+    /// exactly what you want to see; inside a shipped app it is all of that going
+    /// wherever your logs go.
+    ///
+    /// The flow is unaffected either way — this only decides whether the host
+    /// prints what crosses the bridge.
     static let debugBridgeLogging = false
 
     /// Writes the selfie and candidate face crops to Documents. Biometric data
@@ -242,11 +269,34 @@ final class ViewController: UIViewController {
         if webReady { renderGallery() } else { print("⏳ Page still loading — rendering when it is ready") }
     }
 
+    /// Loads the face matcher, the expression reader and the hand detector now,
+    /// while the user reads the intro and frames the selfie, so none of it is
+    /// paid between the tap and the first scanned photo. Idempotent: each load
+    /// happens once, and the post-selfie calls then return at once.
+    private static var modelsWarmed = false
+    func warmUpModels() {
+        guard !Self.modelsWarmed else { return }
+        Self.modelsWarmed = true
+        DispatchQueue.global(qos: .utility).async {
+            let started = Date()
+            _ = Self.faceRecognizer
+            FaceExpression.warmUp()
+            let hands = VNDetectHumanHandPoseRequest()
+            if let ctx = CGContext(data: nil, width: 64, height: 64, bitsPerComponent: 8, bytesPerRow: 0,
+                                   space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue),
+               let blank = ctx.makeImage() {
+                try? VNImageRequestHandler(cgImage: blank, orientation: .up, options: [:]).perform([hands])
+            }
+            print("🔥 Models warmed in \(Int(Date().timeIntervalSince(started) * 1000))ms, before the selfie")
+        }
+    }
+
     /// RENDER_COMPONENT for GalleryPick, with the signed-in session. Never sent
     /// without one: the page cannot upload without a token.
     func renderGallery() {
         guard let session = session else { return }
         if Self.debugBridgeLogging { print("▶️ Rendering GalleryPick for \(session.email)") }
+        warmUpModels()
         sendToWeb([
             "type": "RENDER_COMPONENT",
             "componentName": "GalleryPick",
@@ -669,6 +719,43 @@ extension ViewController {
 
     /// Feature-print distance under which two matches repeat one shot (repeats ~0.2,
     /// unrelated ~0.8). Both stay in the grid; the page pre-selects one per group.
+    /// Match the face before running body pose. Pose is the most expensive request
+    /// in the scan and most photos with a face are not the shopper, so a face that
+    /// is clearly not a match (at or past `gapCutCeiling`, where the gap rule
+    /// stops looking) returns before pose runs. A near miss still takes the body
+    /// gates, so the gap rule and the eval see exactly what they saw before. A
+    /// small face, which the final score re-crops from a larger render, is only
+    /// decided early past `earlyNoMatchSmallFace`, since the re-crop can move it.
+    static let matchBeforePose = true
+    static let earlyNoMatchSmallFace: Float = 0.75
+
+    /// Decode the next photo while Vision works on this one. The scan is one
+    /// serial pipeline otherwise; with this the decode of photo N+1 overlaps the
+    /// detection of photo N. One extra render in memory, about 16MB.
+    static let decodeAhead = true
+
+    /// The hand detector runs on a crop around the padded face box (`handsCropScale`
+    /// times it) instead of the whole render. Only points inside that box count, so
+    /// nothing a hand elsewhere could add is lost.
+    static let handsOnHeadCrop = true
+
+    /// Read the expression on a second thread while the Vision requests run: the
+    /// expression reader is CPU work and Vision mostly Neural Engine, so the two
+    /// overlap. Off, the steps run one after another as before.
+    static let scoreInParallel = true
+    static let handsCropScale: CGFloat = 1.8
+
+    /// Skip a photo from its library record alone, before loading it: too small to
+    /// scan (longer side under `minLocalCopyPixels`) or a panorama (flagged, or
+    /// wider than this ratio). Nothing is read from the file.
+    static let panoramaAspect = 3.0
+    static func shapeReject(_ asset: PHAsset) -> String? {
+        let w = asset.pixelWidth, h = asset.pixelHeight
+        guard w > 0, h > 0 else { return nil }
+        if max(w, h) < minLocalCopyPixels { return "only \(max(w, h))px" }
+        if asset.mediaSubtypes.contains(.photoPanorama) || Double(max(w, h)) / Double(min(w, h)) > panoramaAspect { return "panorama \(w)x\(h)" }
+        return nil
+    }
     static let duplicateDistance: Float = 0.2
 
     static func featurePrint(of image: UIImage) -> VNFeaturePrintObservation? {
@@ -692,6 +779,25 @@ extension ViewController {
 
     /// The lowered cut-off, or nil to keep `matchThreshold`: the midpoint of the
     /// largest gap under the ceiling, clamped to the floor.
+    /// Weak-reference fallback. When the gap rule finds no gap and the matches run
+    /// up to the cut-off anyway, the reference is usually a poor selfie (three
+    /// middling frames put one shopper's borderline photos and the strangers in
+    /// one band, and ten strangers were shown). The cut then tightens to this for
+    /// that scan: a few of the shopper's own borderline photos go with the
+    /// strangers, which beats showing the strangers. Off, the cut-off stands.
+    static let weakReferenceCutEnabled = true
+    static let weakReferenceCut: Float = 0.50
+    /// The fallback applies only when a match sits at or above this, i.e. the
+    /// matches really do reach the cut-off; a clean library stays untouched.
+    static let weakReferenceReach: Float = 0.55
+
+    /// The sharpest selfie frame must reach this Vision capture quality, else the
+    /// page asks for a retake (`selfie-too-blurry`). The number is relative to the
+    /// phone and the light: one phone's good frames read 0.46–0.54, another's
+    /// steady frames read under 0.40 and a floor there locked that user on the
+    /// selfie screen. Set to catch only a truly blurred tap (0.06–0.11); the weak-
+    /// reference fallback handles a merely middling selfie.
+    static let selfieMinQuality: Float = 0.25
     static func gapCut(distances: [Float]) -> Float? {
         guard gapCutEnabled else { return nil }
         let sorted = distances.filter { $0 < gapCutCeiling }.sorted()
@@ -838,6 +944,13 @@ extension ViewController {
         // Whatever the web side did or did not send, a scan always begins clean.
         resetScanState()
 
+        // A first-time user sees the photo-access prompt now, while the reference
+        // is built behind it, instead of after a pause with nothing on screen.
+        // `requestAccessAndScan` asks again once the reference is ready; by then
+        // the answer is known and it returns at once.
+        if PHPhotoLibrary.authorizationStatus(for: .readWrite) == .notDetermined {
+            PHPhotoLibrary.requestAuthorization(for: .readWrite) { _ in }
+        }
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else { return }
 
@@ -874,6 +987,16 @@ extension ViewController {
 
             // One face, looking at the camera (see `selfieMaxYawDegrees`). The page
             // returns to the selfie screen with the reason; nothing below runs.
+            // Too blurred to be the reference — see `selfieMinQuality`. Only when a
+            // quality was measured: a single frame from an older page has none.
+            if let quality = chosen.quality, quality < Self.selfieMinQuality {
+                print("🤳 Selfie rejected — sharpest frame quality \(String(format: "%.2f", quality)), under \(Self.selfieMinQuality)")
+                DispatchQueue.main.async {
+                    self.sendToWeb(["type": "onGalleryScanComplete",
+                                    "payload": ["assetIds": [], "error": "selfie-too-blurry"]])
+                }
+                return
+            }
             if let rejection = self.selfieRejection(in: selfie) {
                 print("🤳 Selfie rejected — \(rejection.note)")
                 DispatchQueue.main.async {
@@ -906,6 +1029,27 @@ extension ViewController {
 
             // Case A, off by default: every other frame with a face becomes a
             // reference too — see `matchAgainstAllFrames`.
+            self.lastReferenceBlended = 1
+
+            // The other usable frames join the reference — see `blendReferenceFrames`.
+            if Self.blendReferenceFrames, frames.count > 1 {
+                var blended = embedding
+                var used = [chosen.index]
+                for (index, frame) in frames.enumerated() where index != chosen.index {
+                    guard let quality = chosen.qualities[index], quality >= Self.blendQualityFloor,
+                          let cg = frame.cgImage, let other = recognizer.embedding(in: cg) else { continue }
+                    blended = zip(blended, other).map { $0 + $1 }
+                    used.append(index)
+                }
+                if used.count > 1 {
+                    let norm = blended.reduce(0) { $0 + $1 * $1 }.squareRoot()
+                    self.referenceEmbedding = blended.map { $0 / norm }
+                    let names = used.sorted().map { String($0 + 1) }.joined(separator: ", ")
+                    self.lastReferenceNote += " · blended frames \(names)"
+                    print("🤳 Reference blended from frames \(names) (quality \(Self.blendQualityFloor) and up)")
+                }
+                self.lastReferenceBlended = used.count
+            }
             if Self.matchAgainstAllFrames {
                 self.extraReferenceEmbeddings = frames.enumerated()
                     .filter { $0.offset != chosen.index }
@@ -921,6 +1065,9 @@ extension ViewController {
             // The expression reader and hand detector load on first use; paid here
             // rather than on the first match. Nothing is kept from either pass.
             FaceExpression.warmUp()
+            if Self.evalMode, let crop = self.crop(selfieCG, to: CGRect(x: 0.25, y: 0.25, width: 0.5, height: 0.5)) {
+                recognizer.benchmark(on: crop)
+            }
             let warmHands = VNDetectHumanHandPoseRequest()
             try? VNImageRequestHandler(cgImage: selfieCG, orientation: .up, options: [:]).perform([warmHands])
 
@@ -1121,6 +1268,12 @@ extension ViewController {
 
             // One loaded photo through every gate. Shared by the local pass and the
             // iCloud pass, so a downloaded photo faces exactly the same checks.
+            // Skipped from the library record alone — see `shapeReject`.
+            var skippedShape = 0
+            // No-matches decided before body pose — see `matchBeforePose`.
+            var earlyNoMatch = 0
+            self?.stageMs = [:]
+            FaceRecognizer.timing = { stage, ms in self?.stageMs[stage, default: 0] += ms }
             func examine(_ asset: PHAsset, _ image: UIImage, n: Int) {
                     // Read before anything else loads: the photo is already upright.
                     let wasRotated = self?.lastLoadRotated ?? false
@@ -1191,6 +1344,7 @@ extension ViewController {
 
                         if distance >= cutoff {
                             noMatch += 1
+                            if self?.lastEarlyNoMatch == true { earlyNoMatch += 1 }
                             if let closest = closestNoMatch, closest <= distance {} else { closestNoMatch = distance }
                             if distance - cutoff <= 0.1 { nearMisses += 1 }
                             eval.note(asset, image: image, rotated: wasRotated, gate: .noMatch, distance: distance,
@@ -1306,6 +1460,8 @@ extension ViewController {
 
             }
 
+            let prefetchQueue = DispatchQueue(label: "co.getswan.gallery.prefetch", qos: .userInitiated)
+            var ahead: (index: Int, group: DispatchGroup, box: LoadBox)?
             for index in 0..<total {
                 // Abandons the scan outright: a superseded scan that still reported
                 // would overwrite the live one.
@@ -1320,7 +1476,36 @@ extension ViewController {
 
                     examined += 1
 
-                    guard let image = self?.loadPhoto(asset: asset) else {
+                    if let why = Self.shapeReject(asset) {
+                        skippedShape += 1
+                        eval.note(asset, image: nil, gate: .noImage)
+                        if Self.verboseLogging { print("  ⃠  [\(n)] skipped — \(why)") }
+                        return
+                    }
+
+                    // The photo decoded ahead of time, if `decodeAhead` started it
+                    // during the previous photo; else loaded now. Either way the next
+                    // one starts decoding before this one is examined.
+                    let loaded: ViewController.LoadResult? = self?.timed("load") {
+                        if let ahead, ahead.index == index {
+                            ahead.group.wait()
+                            return ahead.box.result
+                        }
+                        return self?.loadPhotoResult(asset: asset)
+                    } ?? nil
+                    ahead = nil
+                    if Self.decodeAhead, index + 1 < total {
+                        let nextAsset = assets.object(at: index + 1)
+                        if Self.shapeReject(nextAsset) == nil {
+                            let group = DispatchGroup(), box = LoadBox()
+                            group.enter()
+                            prefetchQueue.async { box.result = self?.loadPhotoResult(asset: nextAsset); group.leave() }
+                            ahead = (index + 1, group, box)
+                        }
+                    }
+                    self?.applyLoad(loaded)
+
+                    guard let image = loaded?.image else {
                         let note = self?.lastLoadNote ?? ""
                         if note.hasPrefix("in iCloud") { cloudOnly += 1 }
                         // A selfie-shaped thumbnail is worth a small download; the
@@ -1402,7 +1587,15 @@ extension ViewController {
             // are withdrawn from the final list and named in `dropped`.
             var gapCut: Float?
             var gapDropped: [String] = []
-            if let cut = Self.gapCut(distances: scoredDistances) {
+            var weakCut = false
+            var decidedCut = Self.gapCut(distances: scoredDistances)
+            if decidedCut == nil, Self.weakReferenceCutEnabled,
+               let farthest = matchedIds.compactMap({ matchScores[$0]?.distance }).max(), farthest >= Self.weakReferenceReach {
+                decidedCut = Self.weakReferenceCut
+                weakCut = true
+                if Self.verboseLogging { print("  ✂️  no gap and matches reach \(String(format: "%.3f", farthest)) — weak reference, cut tightened to \(String(format: "%.2f", Self.weakReferenceCut))") }
+            }
+            if let cut = decidedCut {
                 gapCut = cut
                 gapDropped = matchedIds.filter { (matchScores[$0]?.distance ?? 0) >= cut }
                 let droppedSet = Set(gapDropped)
@@ -1439,6 +1632,7 @@ extension ViewController {
                 examined    \(examined) of \(total) in window
                 reference   \(self?.lastReferenceNote ?? "")
                 no image    \(noImage)   (in iCloud with no usable copy on the phone, or unreadable)
+                skipped     \(skippedShape)   (from the library record alone: too small to scan, or a panorama)
                 local copy  \(localCopies)   (in iCloud, scanned from the phone's smaller copy)
                 iCloud      \(cloudOnly) only in iCloud; \(cloudCandidates.count) looked like selfies; \(cloudDownloaded) downloaded in \(String(format: "%.1f", cloudSeconds))s, \(cloudFailed) failed, \(cloudLeft) left (cap \(Self.cloudDownloadCap), \(Int(Self.cloudTimeBudget))s, Wi-Fi only\(cloudAllowed ? "" : " — was not on Wi-Fi"))
                 no face     \(noFace)
@@ -1447,8 +1641,8 @@ extension ViewController {
                 face small  \(tooSmall)   (under \(Int(Self.minFacePixels))px, even in the original)
                 not full body \(notFullBody)   (neither head to toe: head, \(Self.minAnkles)+ ankle, \(Int(Self.minBodySpan * 100))% span or \(Int(Self.minBodySpanBothAnkles * 100))% with both ankles, feet in frame — nor head to knee: \(Self.minKnees)+ knee, \(Int(Self.minKneeSpan * 100))% span or \(Int(Self.minKneeSpanBothKnees * 100))% with both knees, knees \(String(format: "%.1f", Self.minKneeDrop)) torso below the hips)
                 body retry  \(bodyRetried) re-checked at \(Int(Self.fullResPixels))px after a face match, \(bodyRescued) rescued
-                no match    \(noMatch)
-                gap cut     \(gapCut.map { String(format: "%.3f", $0) } ?? "none")   (\(gapDropped.count) withdrawn: matched under \(String(format: "%.2f", Self.matchThreshold)) but above the gap between the shopper's photos and the rest; \(heldIds.count) held back until the end, \(heldIds.count - gapDropped.count) of them shown)
+                no match    \(noMatch)   (\(earlyNoMatch) decided from the face alone, before body pose)
+                gap cut     \(gapCut.map { String(format: "%.3f", $0) } ?? "none")\(weakCut ? " (weak reference fallback)" : "")   (\(gapDropped.count) withdrawn: matched under \(String(format: "%.2f", Self.matchThreshold)) but above the gap between the shopper's photos and the rest; \(heldIds.count) held back until the end, \(heldIds.count - gapDropped.count) of them shown)
                 sensitive   \(sensitiveSkipped)   (matched, then filtered)
                 unusable    \(unusableFace)   (matched, but the face is no use for the Muse: sunglasses, hand over it, eyes closed or a wink, cut by the frame, blurred)
                 too large   \(tooLargeSkipped)   (original over \(Original.byteCap / 1_048_576)MB — hidden, nothing is sent compressed)
@@ -1458,6 +1652,7 @@ extension ViewController {
                 duplicates  \(duplicates)   (matches that repeat an earlier one; shown, but only one of each is pre-selected)
                 MATCHED     \(matchedIds.count)   (selfie \(found[.selfie, default: 0]), front \(found[.front, default: 0]), side \(found[.side, default: 0]); \(kneeLength) in on the knee rule)
                 elapsed     \(String(format: "%.1f", elapsed))s  (\(String(format: "%.0f", rate))/s)
+                stages      \((self?.stageMs ?? [:]).sorted { $0.key < $1.key }.map { "\($0.key) \(String(format: "%.1f", $0.value / 1000))s" }.joined(separator: " · "))
                 ==============================
 
                 """)
@@ -1471,6 +1666,9 @@ extension ViewController {
                 summary["monthsBack"] = monthsBack
                 summary["limited"] = self?.isLimitedAccess ?? false
                 summary["noImage"] = noImage
+                summary["skippedShape"] = skippedShape
+                summary["earlyNoMatch"] = earlyNoMatch
+                summary["stageMs"] = (self?.stageMs ?? [:]).mapValues { Int($0) }
                 summary["localCopies"] = localCopies
                 summary["noFace"] = noFace
                 summary["group"] = groupSkipped
@@ -1484,6 +1682,7 @@ extension ViewController {
                 summary["closestNoMatch"] = closestNoMatch
                 summary["nearMisses"] = nearMisses
                 summary["gapCut"] = gapCut
+                summary["weakCut"] = weakCut
                 summary["gapDropped"] = gapDropped.count
                 summary["gapHeld"] = heldIds.count
                 summary["sensitive"] = sensitiveSkipped
@@ -1502,6 +1701,7 @@ extension ViewController {
                 summary["frames"] = self?.lastReferenceFrames ?? 1
                 summary["chosenFrame"] = (self?.lastReferenceIndex ?? 0) + 1
                 summary["referenceQuality"] = self?.lastReferenceQuality
+                summary["blendedFrames"] = self?.lastReferenceBlended ?? 1
                 summary["elapsedMs"] = Int(elapsed * 1000)
                 summary["photosPerSecond"] = Int(rate)
                 summary["inCloud"] = cloudOnly
@@ -3185,7 +3385,9 @@ extension ViewController {
 
     /// Render size for every photo in the scan. `minFacePixels` is expressed in
     /// these pixels, so the two must be changed together.
-    static let loadPixels: CGFloat = 2048
+    /// Render size for every photo in the scan. `minFacePixels` is expressed in
+    /// these pixels, so the two must be changed together.
+    static let loadPixels: CGFloat = 1536
 
     /// A face narrower than this, in the scan's render, is embedded from a larger
     /// render, where the landmarks align better. In practice full-length photos.
@@ -3197,9 +3399,46 @@ extension ViewController {
 
     /// Loads a photo at `loadPixels`, network off. For an iCloud-only photo a second
     /// request takes the phone's smaller copy, unless under `minLocalCopyPixels`.
+    /// Loads a photo big enough to crop a usable face from, at `loadPixels`.
+    ///
+    /// `.highQualityFormat` and `.exact` matter: `.fastFormat`/`.fast` hand back
+    /// whatever is cached, often a tiny thumbnail, and the face model then reads
+    /// blur rather than a face. Network stays off — this flow never downloads
+    /// from iCloud.
+    ///
+    /// When the full photo is only in iCloud, the first request answers nil. The
+    /// phone usually still holds a smaller copy — "Optimise iPhone Storage" keeps a
+    /// screen-sized one — and a second, opportunistic request hands that back. One
+    /// library was a quarter iCloud-only, and every one of those photos was
+    /// skipped; the local copy is plenty for a selfie's face. A copy under
+    /// `minLocalCopyPixels` is refused, so a real thumbnail still counts as `noImage`,
+    /// and `lastLoadNote` says which of these happened.
+    /// What one `loadPhoto` found, as a value, so a photo can be decoded on another
+    /// queue (see `decodeAhead`) and its outcome applied on the scan queue.
+    struct LoadResult {
+        var image: UIImage?
+        var note = ""
+        var rotated = false
+        var localCopy = false
+        var thumbnail: UIImage?
+    }
+    final class LoadBox { var result: LoadResult? }
+
+    func applyLoad(_ loaded: LoadResult?) {
+        lastLoadNote = loaded?.note ?? ""
+        lastLoadRotated = loaded?.rotated ?? false
+        lastLoadLocalCopy = loaded?.localCopy ?? false
+        lastLoadThumbnail = loaded?.thumbnail
+    }
     func loadPhoto(asset: PHAsset, pixels: CGFloat = ViewController.loadPixels) -> UIImage? {
-        lastLoadLocalCopy = false
-        lastLoadThumbnail = nil
+        let loaded = loadPhotoResult(asset: asset, pixels: pixels)
+        applyLoad(loaded)
+        return loaded.image
+    }
+
+    /// The load itself, touching no state on the controller.
+    func loadPhotoResult(asset: PHAsset, pixels: CGFloat = ViewController.loadPixels) -> LoadResult {
+        var out = LoadResult()
         let options = PHImageRequestOptions()
         options.deliveryMode = .highQualityFormat
         options.resizeMode = .exact
@@ -3217,7 +3456,7 @@ extension ViewController {
         }
 
         if result == nil {
-            lastLoadNote = inCloud ? "in iCloud, no copy on the phone" : "not flagged as iCloud"
+            out.note = inCloud ? "in iCloud, no copy on the phone" : "not flagged as iCloud"
         }
         if result == nil && inCloud {
             // The phone's copy is asked for in `.opportunistic`; it may answer more
@@ -3246,16 +3485,17 @@ extension ViewController {
                 let longest = max(cg.width, cg.height)
                 if longest >= Self.minLocalCopyPixels {
                     result = best
-                    lastLoadLocalCopy = true
+                    out.localCopy = true
                 } else {
-                    lastLoadNote = "in iCloud, phone copy only \(longest)px — under \(Self.minLocalCopyPixels)"
-                    lastLoadThumbnail = best
+                    out.note = "in iCloud, phone copy only \(longest)px — under \(Self.minLocalCopyPixels)"
+                    out.thumbnail = best
                 }
             }
         }
 
-        lastLoadRotated = result.map { $0.imageOrientation != .up } ?? false
-        return result.map(Self.upright)
+        out.rotated = result.map { $0.imageOrientation != .up } ?? false
+        out.image = result.map(Self.upright)
+        return out
     }
 
     /// Downloads a reduced copy of a photo whose full version is in iCloud. Only
@@ -3384,22 +3624,44 @@ extension ViewController {
 
         var labels: [String: Float] = [:]
         var expression: FaceExpression?
+        let expressionGroup = DispatchGroup()
+        var expressionResult: FaceExpression?
+        var expressionMs = 0.0
         if let headCrop {
             let classify = VNClassifyImageRequest()
-            try? VNImageRequestHandler(cgImage: headCrop, orientation: .up, options: [:]).perform([classify])
+            timed("score.labels") { try? VNImageRequestHandler(cgImage: headCrop, orientation: .up, options: [:]).perform([classify]) }
             for result in classify.results ?? [] where result.confidence >= 0.1 {
                 let name = result.identifier
                 if name == "sunglasses" || name == "eyeglasses" || MuseScore.hatLabels.contains(name) { labels[name] = result.confidence }
             }
-            expression = FaceExpression.read(headCrop: headCrop)
+            if Self.scoreInParallel {
+                // MediaPipe on the CPU while Vision takes the Neural Engine: the two
+                // overlap instead of queueing — see `scoreInParallel`.
+                expressionGroup.enter()
+                DispatchQueue.global(qos: .userInitiated).async {
+                    let started = Date()
+                    expressionResult = FaceExpression.read(headCrop: headCrop)
+                    expressionMs = Date().timeIntervalSince(started) * 1000
+                    expressionGroup.leave()
+                }
+            } else {
+                expression = timed("score.expression") { FaceExpression.read(headCrop: headCrop) }
+            }
         }
 
         // Hands anywhere in the render; one with most of its points on the face
         // is over it. Skin-coloured, so no colour check would see it.
         let hands = VNDetectHumanHandPoseRequest()
         hands.maximumHandCount = 2
+        var zone = face.boundingBox.insetBy(dx: -face.boundingBox.width * 0.15, dy: -face.boundingBox.height * 0.15)
+        timed("score.hands") {
+            if Self.handsOnHeadCrop, let (crop, zoneInCrop) = FaceRecognizer.crop(image, around: zone, scale: Self.handsCropScale) {
+                try? VNImageRequestHandler(cgImage: crop, orientation: .up, options: [:]).perform([hands])
+                zone = zoneInCrop
+            } else {
         try? handler.perform([hands])
-        let zone = face.boundingBox.insetBy(dx: -face.boundingBox.width * 0.15, dy: -face.boundingBox.height * 0.15)
+            }
+        }
         let handOnFace = (hands.results ?? []).contains { hand in
             guard let points = try? hand.recognizedPoints(.all) else { return false }
             return points.values.filter { $0.confidence > 0.3 && zone.contains($0.location) }.count >= MuseScore.handPointsOnFace
@@ -3408,7 +3670,7 @@ extension ViewController {
         // The outfit (see `MuseScore.outfitMultiplier`): formal-wear labels over the
         // whole render, busyness from the clothing below the face.
         let whole = VNClassifyImageRequest()
-        try? handler.perform([whole])
+        timed("score.outfit") { try? handler.perform([whole]) }
         var dressy: Float = 0
         var dressyLabel: String?
         for result in whole.results ?? [] where MuseScore.dressyLabels.contains(result.identifier) && result.confidence > dressy {
@@ -3421,7 +3683,12 @@ extension ViewController {
         let torsoRect = CGRect(x: torso.minX * w, y: (1 - torso.maxY) * h, width: torso.width * w, height: torso.height * h).integral
         var busy: Float = 0
         if torsoRect.width > 8, torsoRect.height > 8, let torsoCrop = image.cropping(to: torsoRect) {
-            busy = MuseScore.busyness(of: torsoCrop)
+            busy = timed("score.busy") { MuseScore.busyness(of: torsoCrop) }
+        }
+        if Self.scoreInParallel {
+            expressionGroup.wait()
+            expression = expressionResult
+            stageMs["score.expression", default: 0] += expressionMs
         }
         return (expression, labels, handOnFace, MuseScore.Outfit(label: dressyLabel, dressy: dressy, busy: busy))
     }
@@ -3432,6 +3699,7 @@ extension ViewController {
         // Cleared first, not after the body check: a photo that leaves early — no
         // face, a group — must not carry the previous photo's retry into the log.
         lastBodyRetry = nil
+        lastEarlyNoMatch = false
         guard let reference = referenceEmbedding, let recognizer = Self.faceRecognizer,
               let cgImage = image.cgImage else { return .noFace }
 
@@ -3441,7 +3709,7 @@ extension ViewController {
             orientation: Self.cgOrientation(image.imageOrientation),
             options: [:]
         )
-        try? handler.perform([request])
+        timed("detect") { try? handler.perform([request]) }
 
         guard let allFaces = request.results, !allFaces.isEmpty else { return .noFace }
 
@@ -3459,7 +3727,7 @@ extension ViewController {
         if Self.requireSingleFace && faces.count > 1 {
             guard faces.count <= Self.sameShopperFacesMax else { return .group(faceCount: faces.count) }
             for face in faces {
-                guard let candidate = recognizer.embedding(in: cgImage, near: face.boundingBox),
+                guard let candidate = timed("group", { recognizer.embedding(in: cgImage, near: face.boundingBox, seed: face) }),
                       FaceRecognizer.distance(reference, candidate) < Self.matchThreshold
                 else { return .group(faceCount: faces.count) }
             }
@@ -3501,20 +3769,21 @@ extension ViewController {
 
         // After the face gates on purpose: pose detection is the most expensive
         // request, so it runs only on photos with one usable face.
-        var body = bodyCheck(in: cgImage, orientation: Self.cgOrientation(image.imageOrientation),
-                             face: faces.first?.boundingBox)
-        // Each reflection of the shopper has a body too; those are not other people.
-        body.shopperFaces = lastShopperFaces
 
         // Distances of every face in `source` to the selfie; nil when none could be
         // embedded. Defined here so the full-body gate can ask first.
         func score(from source: CGImage) -> (distances: [Float], faceWidth: CGFloat)? {
+            timed("embed") { embed(from: source) }
+        }
+        func embed(from source: CGImage) -> (distances: [Float], faceWidth: CGFloat)? {
             let faceWidth = faces.map { $0.boundingBox.width * CGFloat(source.width) }.max() ?? widest
 
             var distances: [Float] = []
             for face in faces {
                 // Vision's boxes are normalised, so they fit the larger render unchanged.
-                guard let candidate = recognizer.embedding(in: source, near: face.boundingBox) else { continue }
+                // Vision's boxes are normalised, so they fit the larger render unchanged.
+                // Seeded with the observation when `source` is the render it was detected on.
+                guard let candidate = recognizer.embedding(in: source, near: face.boundingBox, seed: source === cgImage ? face : nil) else { continue }
                 var distance = FaceRecognizer.distance(reference, candidate)
 
                 // Under `matchAgainstAllFrames` the score is the second-smallest
@@ -3540,6 +3809,33 @@ extension ViewController {
 
         // A selfie is recognised by shape before the full-body gate. Then only the
         // shopper in the photo: the person detector counts anyone, even back-on.
+        // Match before pose — see `matchBeforePose`. A face clearly not the
+        // shopper's returns here, with an empty body: it never reaches the grid,
+        // and the gap rule ignores distances this far out.
+        var quick: (distances: [Float], faceWidth: CGFloat)?
+        if Self.matchBeforePose {
+            quick = score(from: cgImage)
+            if let quick {
+                let best = quick.distances.min() ?? 1
+                if best >= Self.gapCutCeiling && (widest >= Self.fullResFaceBelow || best >= Self.earlyNoMatchSmallFace) {
+                    lastEarlyNoMatch = true
+                    let unchecked = BodyCheck(lowerJoints: 0, ankles: 0, headSeen: false, span: 0, footRoom: 0, people: 1,
+                                              shoulderSpread: nil, hipSpread: nil)
+                    let ratio = Self.faceRatio(boxWidth: faces.map(\.boundingBox.width).max() ?? 0, in: cgImage)
+                    return .scored(distances: quick.distances, facePixels: Int(quick.faceWidth), body: unchecked,
+                                   type: Self.photoType(faceRatio: ratio, yaw: faces.first?.yaw?.doubleValue, body: unchecked),
+                                   profile: false, museScore: nil)
+                }
+            }
+        }
+
+        // Ordered after the face gates deliberately — pose detection is the most
+        // expensive request here, and this way it only runs on photos that already
+        // have one usable face.
+        var body = timed("pose") { bodyCheck(in: cgImage, orientation: Self.cgOrientation(image.imageOrientation),
+                                             face: faces.first?.boundingBox) }
+        // Each reflection of the shopper has a body too; those are not other people.
+        body.shopperFaces = lastShopperFaces
         if body.hasOthers {
             return .otherPeople(body: body)
         }
@@ -3550,10 +3846,10 @@ extension ViewController {
             // Legs seen but not enough of them: one more look at the larger render,
             // only when the face already matches, so strangers cost nothing extra.
             guard body.headSeen, body.lowerJoints >= 1,
-                  let quick = score(from: cgImage), (quick.distances.min() ?? 1) < Self.matchThreshold,
+                  let quick = quick ?? score(from: cgImage), (quick.distances.min() ?? 1) < Self.matchThreshold,
                   let larger = largerRender()
             else { return .notFullBody(body: body) }
-            var again = bodyCheck(in: larger, orientation: .up, face: faces.first?.boundingBox)
+            var again = timed("pose") { bodyCheck(in: larger, orientation: .up, face: faces.first?.boundingBox) }
             again.shopperFaces = lastShopperFaces
             let f = { (v: CGFloat) in String(format: "%.2f", v) }
             lastBodyRetry = ("re-checked at \(larger.width)x\(larger.height) after a face match (d \(String(format: "%.3f", quick.distances.min() ?? 1))): ankles \(body.ankles)→\(again.ankles), span \(f(body.span))→\(f(again.span)), feet room \(f(body.footRoom))→\(f(again.footRoom))",
@@ -3577,15 +3873,17 @@ extension ViewController {
             source = larger
             lastCropFullRes = true
         }
-        guard let scored = score(from: source) else { return .noFace }
+        guard let scored = (source === cgImage ? quick : nil) ?? score(from: source) else { return .noFace }
         // Matches only — the rest never reach the grid, so their score is never
         // read. On the scan's render and its handler, not the larger crop.
         var museScore: MuseScore?
         if (scored.distances.min() ?? 1) < Self.matchThreshold {
+            museScore = timed("score") {
             let context = museContext(face: faces[0], in: cgImage, handler: handler)
-            museScore = MuseScore(face: faces[0], in: cgImage, handler: handler, faceWidth: widest,
+                return timed("score.terms") { MuseScore(face: faces[0], in: cgImage, handler: handler, faceWidth: widest,
                                   expression: context.expression, labels: context.labels, handOnFace: context.handOnFace,
-                                  outfit: context.outfit)
+                                                         outfit: context.outfit) }
+            }
         }
         return .scored(distances: scored.distances, facePixels: Int(scored.faceWidth), body: body, type: type, profile: profile, museScore: museScore)
     }
@@ -3689,8 +3987,23 @@ extension ViewController {
 
     /// The sharpest selfie frame by Vision's capture quality. Frames with no face
     /// are out; a tie keeps the tapped frame, the last one sent.
-    func chooseReference(_ frames: [UIImage]) -> (image: UIImage, index: Int, note: String, quality: Float?) {
-        guard frames.count > 1 else { return (frames[0], 0, "1 frame", nil) }
+    /// The sharpest of the selfie frames, by Vision's face capture quality. Frames
+    /// with no face are out; a tie, or no quality at all, keeps the tapped frame,
+    /// which is the last one sent.
+    /// Blend the usable selfie frames into one reference — see `blendReferenceFrames`.
+    /// Each frame's embedding carries the quirks of that frame (a hint of
+    /// expression, a small turn, a shadow), and with one frame as the reference
+    /// every distance in the scan inherits them: two sharp frames of the same
+    /// face gave two different grids. Averaging the frames' embeddings, as face
+    /// systems enrol from several captures, cancels most of that. Frames with no
+    /// face or a quality under `blendQualityFloor` (a blurred tap at 0.09) stay
+    /// out. Two extra embeddings per scan, once. Off, the sharpest frame alone is
+    /// the reference, as before.
+    static let blendReferenceFrames = true
+    static let blendQualityFloor: Float = 0.3
+
+    func chooseReference(_ frames: [UIImage]) -> (image: UIImage, index: Int, note: String, quality: Float?, qualities: [Float?]) {
+        guard frames.count > 1 else { return (frames[0], 0, "1 frame", nil, [nil]) }
 
         let qualities: [Float?] = frames.map { image in
             guard let cgImage = image.cgImage else { return nil }
@@ -3710,7 +4023,7 @@ extension ViewController {
         // Three decimals: frames a second apart often tie at two, and the line
         // should show why one won.
         let scores = qualities.map { $0.map { String(format: "%.3f", $0) } ?? "no face" }.joined(separator: " / ")
-        return (frames[best], best, "\(frames.count) frames, quality \(scores) → frame \(best + 1)\(best == frames.count - 1 ? " (tapped)" : "")", qualities[best])
+        return (frames[best], best, "\(frames.count) frames, quality \(scores) → frame \(best + 1)\(best == frames.count - 1 ? " (tapped)" : "")", qualities[best], qualities)
     }
 
     /// Margin around the face box in the debug crops, as a fraction of the box.

@@ -7,7 +7,7 @@ import CoreImage
 /// `FaceModels/`; only the selected one should be a member of the app target
 /// (see the folder's exceptions in the project), so the bundle carries one.
 ///
-/// Measured on full-length, side and selfie photos of two testers, head-turned
+/// Measured on full-length, side and selfie photos of two people, head-turned
 /// face shots of seven more people, and 1,756 stranger pairs, all on the same
 /// five-point alignment:
 ///
@@ -27,10 +27,10 @@ enum FaceModel: String {
     /// distance is about the face, not the framing around it.
     var matchThreshold: Float {
         switch self {
-        // Fronts and sides, two testers: 10/10 and 112/130 (the misses are heads turned
+        // Fronts and sides, two libraries: 10/10 and 112/130 (the misses are heads turned
         // past ~45°). Head turned 60–75°: 57/64. Strangers: none under 0.643.
         case .sface: return 0.60
-        // Fronts and sides, two testers: 10/10 and 129/130. Head turned 60–75°:
+        // Fronts and sides, two libraries: 10/10 and 129/130. Head turned 60–75°:
         // 61/64. Strangers: none under 0.792 — the turned heads set this bar.
         case .insightFace: return 0.75
         }
@@ -90,11 +90,85 @@ nonisolated final class FaceRecognizer: @unchecked Sendable {
     ///
     /// Vision detects the face afresh on this image rather than being handed the
     /// box: seeded with a detection from a smaller render, the landmarks of a turned
-    /// head landed wide and one tester's half-turned sides scored 0.70–0.89 instead
+    /// head landed wide and one shopper's half-turned sides scored 0.70–0.89 instead
     /// of 0.58–0.61. The box only picks which of the fresh faces is meant.
-    func embedding(in image: CGImage, near box: CGRect? = nil) -> [Float]? {
+    /// With a box, the landmarks are detected inside a crop around it (`landmarkCropScale`
+    /// times the box) rather than over the whole image: the same fresh detection, on a
+    /// fraction of the pixels. The crop falls back to the full image when it finds no face.
+    static let landmarkCropEnabled = true
+    static let landmarkCropScale: CGFloat = 2.5
+
+    /// With `seed`, a face observation detected on this same image, the landmarks
+    /// request skips its own face search and fits points to that face. Only for the
+    /// render the seed was detected on: a box from a smaller render lands wide.
+    static let seedLandmarks = true
+
+    func embedding(in image: CGImage, near box: CGRect? = nil, seed: VNFaceObservation? = nil) -> [Float]? {
+        if Self.seedLandmarks, let seed {
+            let request = VNDetectFaceLandmarksRequest()
+            request.inputFaceObservations = [seed]
+            Self.timed("embed.landmarks") { try? VNImageRequestHandler(cgImage: image, orientation: .up, options: [:]).perform([request]) }
+            if let face = request.results?.first, face.landmarks != nil, let result = embed(image, face: face) {
+                return result
+            }
+        }
+        if Self.landmarkCropEnabled, let box, let (crop, cropBox) = Self.crop(image, around: box, scale: Self.landmarkCropScale) {
+            if let result = embeddingFresh(in: crop, near: cropBox) { return result }
+        }
+        return embeddingFresh(in: image, near: box)
+    }
+
+    /// One-off: how long one prediction takes on the configured compute units
+    /// against a CPU-only copy of the model, printed once so a slow model path
+    /// shows up in the console. Diagnostic only.
+    func benchmark(on face: CGImage) {
+        func time(_ model: MLModel) -> Double? {
+            guard let input = try? MLFeatureValue(cgImage: face, constraint: constraint, options: nil),
+                  let provider = try? MLDictionaryFeatureProvider(dictionary: ["face": input]) else { return nil }
+            _ = try? model.prediction(from: provider)
+            let started = Date()
+            for _ in 0..<10 { _ = try? model.prediction(from: provider) }
+            return Date().timeIntervalSince(started) * 100
+        }
+        guard let url = Bundle.main.url(forResource: kind.rawValue, withExtension: "mlmodelc") else { return }
+        let cpu = MLModelConfiguration(); cpu.computeUnits = .cpuOnly
+        let all = MLModelConfiguration(); all.computeUnits = .all
+        let onCPU = (try? MLModel(contentsOf: url, configuration: cpu)).flatMap(time)
+        let onAll = (try? MLModel(contentsOf: url, configuration: all)).flatMap(time)
+        let configured = time(model)
+        let f = { (v: Double?) in v.map { String(format: "%.1fms", $0) } ?? "n/a" }
+        print("🧮 face model, one prediction: configured (CPU+ANE) \(f(configured)) · CPU only \(f(onCPU)) · all units \(f(onAll))")
+    }
+
+    /// A crop of `image` around the normalised `box`, and the box in the crop's own
+    /// normalised coordinates. Nil when the crop would be the whole image anyway.
+    static func crop(_ image: CGImage, around box: CGRect, scale: CGFloat) -> (CGImage, CGRect)? {
+        let region = CGRect(x: box.midX - box.width * scale / 2, y: box.midY - box.height * scale / 2,
+                            width: box.width * scale, height: box.height * scale)
+            .intersection(CGRect(x: 0, y: 0, width: 1, height: 1))
+        guard region.width < 0.9 || region.height < 0.9 else { return nil }
+        let w = CGFloat(image.width), h = CGFloat(image.height)
+        // Vision's origin is bottom-left; CGImage cropping is top-left.
+        let pixels = CGRect(x: region.minX * w, y: (1 - region.maxY) * h, width: region.width * w, height: region.height * h).integral
+        guard pixels.width > 16, pixels.height > 16, let cropped = image.cropping(to: pixels) else { return nil }
+        let inCrop = CGRect(x: (box.minX - region.minX) / region.width, y: (box.minY - region.minY) / region.height,
+                            width: box.width / region.width, height: box.height / region.height)
+        return (cropped, inCrop)
+    }
+
+    /// Where the embedding's time goes, for the scan's stage timers: landmarks,
+    /// alignment, model. Set by the host; nil costs nothing.
+    nonisolated(unsafe) static var timing: ((String, Double) -> Void)?
+    private static func timed<T>(_ stage: String, _ work: () -> T) -> T {
+        guard let timing else { return work() }
+        let started = Date()
+        defer { timing(stage, Date().timeIntervalSince(started) * 1000) }
+        return work()
+    }
+
+    private func embeddingFresh(in image: CGImage, near box: CGRect?) -> [Float]? {
         let request = VNDetectFaceLandmarksRequest()
-        try? VNImageRequestHandler(cgImage: image, orientation: .up, options: [:]).perform([request])
+        Self.timed("embed.landmarks") { try? VNImageRequestHandler(cgImage: image, orientation: .up, options: [:]).perform([request]) }
         let faces = request.results ?? []
         let face: VNFaceObservation?
         if let box {
@@ -103,8 +177,8 @@ nonisolated final class FaceRecognizer: @unchecked Sendable {
         } else {
             face = faces.max { $0.boundingBox.width * $0.boundingBox.height < $1.boundingBox.width * $1.boundingBox.height }
         }
-        guard let face, let aligned = aligned(image, face: face) else { return nil }
-        return embedding(aligned: aligned)
+        guard let face else { return nil }
+        return embed(image, face: face)
     }
 
     /// Intersection over union of two boxes.
@@ -170,11 +244,58 @@ nonisolated final class FaceRecognizer: @unchecked Sendable {
 
     /// The face warped onto the template.
     func aligned(_ image: CGImage, face: VNFaceObservation) -> CGImage? {
+        guard let warped = alignedImage(image, face: face) else { return nil }
+        return context.createCGImage(warped, from: CGRect(x: 0, y: 0, width: 112, height: 112))
+    }
+
+    /// The face warped onto the 112×112 template, still a Core Image recipe.
+    func alignedImage(_ image: CGImage, face: VNFaceObservation) -> CIImage? {
         guard let src = Self.fivePoints(face, width: image.width, height: image.height) else { return nil }
         // Core Image shares Vision's bottom-left origin, so the template is flipped to match.
         let dst = Self.template.map { CGPoint(x: $0.x, y: 112 - $0.y) }
-        let warped = CIImage(cgImage: image).transformed(by: Self.similarity(from: src, to: dst))
-        return context.createCGImage(warped, from: CGRect(x: 0, y: 0, width: 112, height: 112))
+        return CIImage(cgImage: image).transformed(by: Self.similarity(from: src, to: dst))
+    }
+
+    /// Render the aligned face straight into one reused 112×112 pixel buffer and
+    /// hand that to the model, instead of making a CGImage and letting Core ML
+    /// convert it per call. The prediction itself is about 1ms; the conversion
+    /// was most of the rest. One buffer, so the render and the prediction are
+    /// serialised under a lock.
+    static let directPixelBuffer = true
+    private let bufferLock = NSLock()
+    private lazy var faceBuffer: CVPixelBuffer? = {
+        var buffer: CVPixelBuffer?
+        let attrs = [kCVPixelBufferCGImageCompatibilityKey: true, kCVPixelBufferCGBitmapContextCompatibilityKey: true] as CFDictionary
+        CVPixelBufferCreate(nil, 112, 112, kCVPixelFormatType_32BGRA, attrs, &buffer)
+        return buffer
+    }()
+
+    /// Align and embed one detected face from `image`.
+    private func embed(_ image: CGImage, face: VNFaceObservation) -> [Float]? {
+        if Self.directPixelBuffer, let buffer = faceBuffer {
+            guard let warped = Self.timed("embed.align", { alignedImage(image, face: face) }) else { return nil }
+            bufferLock.lock(); defer { bufferLock.unlock() }
+            Self.timed("embed.align") {
+                context.render(warped, to: buffer, bounds: CGRect(x: 0, y: 0, width: 112, height: 112), colorSpace: CGColorSpaceCreateDeviceRGB())
+            }
+            return Self.timed("embed.model") {
+                guard let input = try? MLFeatureValue(pixelBuffer: buffer) as MLFeatureValue?,
+                      let provider = try? MLDictionaryFeatureProvider(dictionary: ["face": input]),
+                      let output = try? model.prediction(from: provider).featureValue(for: "embedding")?.multiArrayValue
+                else { return nil }
+                return Self.normalised(output)
+            }
+        }
+        guard let aligned = Self.timed("embed.align", { aligned(image, face: face) }) else { return nil }
+        return Self.timed("embed.model") { embedding(aligned: aligned) }
+    }
+
+    private static func normalised(_ output: MLMultiArray) -> [Float]? {
+        var vector = (0..<output.count).map { output[$0].floatValue }
+        let length = sqrt(vector.reduce(0) { $0 + $1 * $1 })
+        guard length > 0 else { return nil }
+        for i in vector.indices { vector[i] /= length }
+        return vector
     }
 
     /// Unit-length identity vector for an aligned face. Each package carries its
