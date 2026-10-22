@@ -25,11 +25,11 @@ final class ViewController: UIViewController {
     /// Who the flow is running for. `gender` is optional: "male" or "female" skips
     /// the flow's own gender screen; anything else, or nil, shows it.
     static let shopDomain = "hm_ie"
-    static let userGender = "male"        // "male" | "female"
+    static let userGender = ""        // "male" | "female"
 
     /// Optional height in cm (a string works too). Inside 152–213 the ruler screen is
     /// skipped; otherwise the ruler is shown and `onComplete` carries the user's answer.
-    static let userHeightCm: Any? = 181
+    static let userHeightCm: Any? = nil
 
     /// How far back the library search reaches, in months (1–36, clamped). Older
     /// photos are reached only through "Load more". 12 is the flow's default.
