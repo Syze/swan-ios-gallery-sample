@@ -3,10 +3,8 @@ import Security
 
 // Swan sign-in for the Gallery Pick reference host.
 //
-// A session token comes from `POST /auth/session`, which takes the publishable
-// *and* the secret key. In a shipped app that call belongs on your own server —
-// the app receives only the token — and the keys below never ship. This sample
-// calls the API directly because it is a test host.
+// A session token comes from the integration session endpoint, which takes the
+// publishable key, email and name.
 //
 // At launch `ViewController` shows `SwanSessionViewController`. With a saved
 // token that has more than a minute left it offers that email and a Continue
@@ -14,12 +12,10 @@ import Security
 // for email and name. The page loads once there is a token.
 
 enum SwanSessionConfig {
-    /// The API the token is minted on. It must be the environment the web bundle
-    /// talks to (`API_BASE_URL` in the package), or every upload is refused.
-    static let apiBase = URL(string: "https://develop.api.swanvision.ai")!
-    // Swan's development keys, for trying the sample. Replace them with your own.
-    static let publishableKey = "sw_pk_6ceee992d2964a4088aba4577ebc802a"
-    static let secretKey = "sw_sk_5f85098a56fd439fae417a672cf71763"
+    /// Where the token is minted. It must be the environment the web bundle talks
+    /// to (`API_BASE_URL` in the package), or every upload is refused.
+    static let sessionURL = URL(string: "https://swan-integration.swanvision.dev/api/session")!
+    static let publishableKey = "sw_pk_82ea4cb0719240c1a07c559eda5924a0"
 
     /// A token this close to expiry counts as gone, so a scan does not start on a
     /// token that dies during the upload.
@@ -121,16 +117,15 @@ enum SwanSessionError: LocalizedError {
 }
 
 enum SwanSessionClient {
-    /// `POST /auth/session` → a token for this email. The name is required by the
-    /// API; it labels the session, nothing more.
+    /// `POST` to the session endpoint → a token for this email. The name is
+    /// required by the API; it labels the session, nothing more.
     static func createSession(email: String, name: String) async throws -> SwanSession {
-        var request = URLRequest(url: SwanSessionConfig.apiBase.appendingPathComponent("auth/session"))
+        var request = URLRequest(url: SwanSessionConfig.sessionURL)
         request.httpMethod = "POST"
         request.timeoutInterval = 15
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONSerialization.data(withJSONObject: [
             "publishableKey": SwanSessionConfig.publishableKey,
-            "secretKey": SwanSessionConfig.secretKey,
             "userEmail": email,
             "userName": name,
         ])
@@ -254,7 +249,7 @@ final class SwanSessionViewController: UIViewController, UITextFieldDelegate {
 
         // Which API this signs into, so nobody wonders which keys ran.
         let footer = UILabel()
-        footer.text = "Signs in to \(SwanSessionConfig.apiBase.host ?? "Swan"). The session is kept on this phone until it expires."
+        footer.text = "Signs in to \(SwanSessionConfig.sessionURL.host ?? "Swan"). The session is kept on this phone until it expires."
         footer.font = .preferredFont(forTextStyle: .caption1)
         footer.textColor = .tertiaryLabel
         footer.numberOfLines = 0
