@@ -1,6 +1,6 @@
 
 
-// Swan Gallery Pick host — pairs with Swan mobile 1.3.0. Release notes and
+// Swan Gallery Pick host — pairs with Swan mobile 1.3.2. Release notes and
 // whether this file needs updating: CHANGELOG.md.
 
 import UIKit
@@ -15,7 +15,7 @@ final class ViewController: UIViewController {
 
     /// Where the SDK bundle is served from. Must be **https** — getUserMedia needs
     /// a secure context, so an http or file:// URL gives no camera.
-    let sdkURL = URL(string: "https://d3fujk4qpp9eu4.cloudfront.net/index.html")!
+    let sdkURL = URL(string: "https://swan-mobile-web-component.swan.so/v1.3.2/index.html")!
 
     static let bridgeName = "swanBridge"
 
@@ -59,14 +59,31 @@ final class ViewController: UIViewController {
                 "searchingPage": [
                     "headingTitle": "Finding photos of you.",
                     "subHeadingTitle": "We're looking for a selfie and clear, full-length photos from the front and side.",
+                    // Around the "13 of 1567" count: text before it, and after it.
+                    "progressPreText": "Looking through your photos…",
+                    "progressPostText": "",
                 ],
                 "pickerPage": [
                     "scanningHeadingTitle": "Finding photos of you.",
                     "scanningSubHeadingTitle": "We're looking for a selfie and clear, full-length photos from the front and side.",
+                    // Around the "13 of 1567" count while the scan runs: before it, and after it.
                     "scanningStatusText": "Found",
+                    "scanningStatusPostText": "",
                     "headingTitle": "Here's what we picked.",
                     "subHeadingTitle": "We'll measure you from these. Swap any you'd rather not use.",
                     "buttonText": "Build my Muse",
+                ],
+                "heightPage": [
+                    "subHeadingTitle": "",
+                ],
+                "genderPage": [
+                    "subHeadingTitle": "",
+                ],
+                "capturePage": [
+                    "headingTitle": "These don't match your selfie.",
+                    "subHeadingTitle": "We couldn't find any photos in your gallery. Please take three new ones: a full-body front view, a full-body side view (both head to toe), and a clear selfie. Each photo is taken automatically after a countdown.",
+                    "buttonText": "I'm ready",
+                    "countingButtonText": "Get into position…",
                 ],
                 "common": [
                     // Footer on the searching screen, and again while the grid is still filling.
@@ -110,6 +127,11 @@ final class ViewController: UIViewController {
     /// Only filled in eval mode, since the quality number costs an extra Vision pass.
     /// How many selfie frames went into the reference — see `blendReferenceFrames`.
     var lastReferenceBlended = 1
+    /// Every frame's capture quality, the widest distance from the chosen frame to
+    /// another blended frame, and how far the blend moved from the chosen frame.
+    var lastReferenceQualities: [Float?] = []
+    var lastReferenceSpread: Float?
+    var lastReferenceShift: Float?
     var lastFaceMetrics: FaceMetrics?
 
     /// Whether the last photo `matchPerson` scored had its face re-cropped from a
@@ -123,6 +145,9 @@ final class ViewController: UIViewController {
     /// Whether the last photo `loadPhoto` returned was the phone's smaller copy of a
     /// photo whose full version is only in iCloud. Counted by the scan.
     var lastLoadLocalCopy = false
+    var lastLoadFromCloud = false
+    /// Bigger copies fetched from iCloud for a small face, for the summary.
+    var cloudLargerDownloads = 0
 
     /// Why the last `loadPhoto` came back empty, for the verbose log: whether iOS
     /// said the photo was in iCloud, and how large a copy the phone offered.
@@ -163,22 +188,42 @@ final class ViewController: UIViewController {
     // ---- iCloud selfies ------------------------------------------------------
     // A 120px iCloud thumbnail shows whether one face fills the frame; those alone are downloaded small.
 
-    /// Longest side of the copy asked for. Enough for a selfie's face at the sizes
-    /// the matcher is tuned for; a fraction of the original's bytes.
-    static let cloudPixels: CGFloat = 1024
-    /// Downloads per scan, most recent first. Whatever the filter finds beyond this
-    /// stays out, so a library of strangers' selfies costs a bounded amount.
-    static let cloudDownloadCap = 40
-    /// Wall-clock budget for the whole iCloud pass, on top of the local scan.
-    static let cloudTimeBudget: TimeInterval = 60
+    /// Longest side of a downloaded copy: the scan's own render size, so it is
+    /// matched on the same pixels as a local photo.
+    static let cloudPixels: CGFloat = loadPixels
+    /// Downloads per scan, newest first; one cap on Wi-Fi, a lower one on mobile data.
+    /// The mobile cap is a placeholder until a scan on mobile data has been measured.
+    static let cloudDownloadCapWifi = 100
+    static let cloudDownloadCapMobile = 50
+    /// Download slots held for full-length candidates, so recent selfies cannot crowd them out.
+    static let cloudFullLengthReserve = 20
+    /// Downloads start during the local pass; the scan waits at most `cloudTail` after
+    /// the local pass for the rest, which are counted as left.
+    static let cloudTail: TimeInterval = 30
     /// Per-photo limit, as for sizing an original.
     static let cloudTimeout: DispatchTimeInterval = .seconds(10)
+    /// Downloads in flight at once.
+    static let cloudParallel = 6
+    /// A small copy fetched first, about 30KB: faces and people are counted on it
+    /// and only a lone person goes on to the full download. Group photos read as
+    /// one tall person on a 120px thumbnail.
+    static let cloudPreviewPixels: CGFloat = 320
+    /// A full-length candidate is fetched at this size straight away: its face is
+    /// 60 to 90px at the scan's 1536, under the 120px floor, and one bigger copy
+    /// (about 1MB) saves a second trip for every match. Selfies stay at `cloudPixels`.
+    static let cloudFullLengthPixels: CGFloat = 2560
+    /// A single person spanning this much of a thumbnail's height is a full-length candidate.
+    /// Measured on 120px thumbnails: 124 of 134 full-length photos pass, 2 of 22 others.
+    static let cloudPersonHeight: CGFloat = 0.6
 
-    /// Wi-Fi, not Low Data Mode, and online. The iCloud pass never spends mobile data.
+    /// Online and not a connection the user asked the phone to go easy on (Low Data Mode).
+    /// Mobile data is allowed, under `cloudDownloadCapMobile`.
     static var cloudDownloadsAllowed: Bool {
         let path = pathMonitor.currentPath
-        return path.status == .satisfied && !path.isExpensive && !path.isConstrained
+        return path.status == .satisfied && !path.isConstrained
     }
+    static var cloudOnMobile: Bool { pathMonitor.currentPath.isExpensive }
+    static var cloudDownloadCap: Int { cloudOnMobile ? cloudDownloadCapMobile : cloudDownloadCapWifi }
 
     /// Bumped on every reset. A scan loop stops when the value changes, so a block
     /// that outlives a page reload cannot reply into the next scan.
@@ -239,16 +284,16 @@ final class ViewController: UIViewController {
         // Started now rather than at the first scan: a monitor's first reading takes
         // a moment, and the scan reads it the moment a photo matches.
         _ = Self.pathMonitor
-        setupWebView()
-        // The page loads now, behind the sign-in screen, and renders nothing until
-        // it is handed a session — see `renderGallery`.
-        webView.load(URLRequest(url: sdkURL))
-        startWebReadyWatchdog()
+        // The web view is created after Continue. Building it here blocks the main
+        // thread through launch and freezes the email field while the bundle loads.
     }
 
     /// Decided once the view is on screen: presenting from `viewDidLoad` is refused
     /// because the view is not in the window yet.
     private var started = false
+
+    /// Still on screen while the gallery page loads. Nil once that page is shown.
+    private weak var signInController: SwanSessionViewController?
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
@@ -260,13 +305,45 @@ final class ViewController: UIViewController {
     /// The page has said WEB_READY and is waiting for RENDER_COMPONENT.
     private var webReady = false
 
-    /// Signed in. The flow renders as soon as both halves are there: the session
-    /// and the page — whichever arrives second triggers it.
-    func start(with session: SwanSession) {
+    /// Signed in. The form stays up until the page is ready, so a slow load is a
+    /// spinner instead of a white screen over a dead email field.
+    func openGallery(with session: SwanSession) {
         self.session = session
         let until = session.validUntil.map { DateFormatter.localizedString(from: $0, dateStyle: .medium, timeStyle: .short) } ?? "unknown"
         if Self.debugBridgeLogging { print("👤 Signed in as \(session.email) — token valid until \(until)") }
-        if webReady { renderGallery() } else { print("⏳ Page still loading — rendering when it is ready") }
+        signInController?.beginOpeningGallery()
+        // One turn so the spinner paints before WebKit takes the main thread.
+        DispatchQueue.main.async { [weak self] in
+            self?.loadGalleryPage()
+        }
+    }
+
+    /// Creates the web view on first use and loads the bundle. Renders immediately
+    /// when a reload has already reported WEB_READY.
+    private func loadGalleryPage() {
+        if webView == nil { setupWebView() }
+        if webReady {
+            revealGallery()
+            return
+        }
+        startWebReadyWatchdog()
+        webView.load(URLRequest(url: sdkURL))
+    }
+
+    /// RENDER_COMPONENT has a session and a ready page. The sign-in screen can go.
+    private func revealGallery() {
+        renderGallery()
+        guard let signIn = signInController else { return }
+        signInController = nil
+        signIn.dismiss(animated: true)
+    }
+
+    /// The sign-in screen is still up and the page will not become ready.
+    private func pageDidFail(_ message: String) {
+        guard signInController != nil else { return }
+        webReadyWatchdog?.cancel()
+        webReady = false
+        signInController?.showPageError(message)
     }
 
     /// Loads the face matcher, the expression reader and the hand detector now,
@@ -316,14 +393,18 @@ final class ViewController: UIViewController {
         ])
     }
 
-    /// The sign-in screen, over the empty web view. It cannot be dismissed
-    /// without a token. With a live session it offers that email and Continue.
+    /// The sign-in screen: stays up until the gallery page is ready, cannot be dismissed
+    /// without a token, and with a live session offers that email and Continue.
     func presentSignIn(existing: SwanSession? = nil) {
         let signIn = SwanSessionViewController(existing: existing)
         signIn.modalPresentationStyle = .fullScreen
-        signIn.onSignedIn = { [weak self, weak signIn] session in
-            signIn?.dismiss(animated: true) { self?.start(with: session) }
+        signIn.onSignedIn = { [weak self] session in
+            self?.openGallery(with: session)
         }
+        signIn.onRetryPage = { [weak self] in
+            DispatchQueue.main.async { self?.loadGalleryPage() }
+        }
+        signInController = signIn
         present(signIn, animated: false)
     }
 
@@ -337,6 +418,7 @@ final class ViewController: UIViewController {
     // MARK: - Setup
 
     func setupWebView() {
+        guard webView == nil else { return }
         let contentController = WKUserContentController()
 
         // Retained strongly, so passing `self` leaks the VC, the web view and a
@@ -368,14 +450,26 @@ final class ViewController: UIViewController {
         ])
     }
 
+    /// A reload that superseded this one. Not a failure of the page the user is waiting on.
+    private static func cancelled(_ error: Error) -> Bool {
+        let error = error as NSError
+        return error.domain == NSURLErrorDomain && error.code == NSURLErrorCancelled
+    }
+
+    /// How long the sign-in screen waits for WEB_READY before offering Try again. A first
+    /// load on a slow connection fetches the bundle and the face-guide model, so it is generous.
+    static let webReadyTimeout: TimeInterval = 30
+
     /// A JS error in the bundle gives a successful navigation and a blank page, the
     /// same white screen as a network failure. This log tells them apart.
     func startWebReadyWatchdog() {
-        let work = DispatchWorkItem {
-            print("⏰ No WEB_READY within 15s — the bundle probably threw. Check Web Inspector.")
+        webReadyWatchdog?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            print("⏰ No WEB_READY within \(Int(Self.webReadyTimeout))s — the bundle probably threw. Check Web Inspector.")
+            self?.pageDidFail("The gallery didn't open. Check your connection and try again.")
         }
         webReadyWatchdog = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 15, execute: work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.webReadyTimeout, execute: work)
     }
 
     // MARK: - Sending to web
@@ -448,7 +542,7 @@ extension ViewController: WKScriptMessageHandler {
             let webVersion = (payload["version"] as? String).map { " v\($0)" } ?? ""
             print("✅ WEB_READY\(webVersion)")
             webReady = true
-            if session != nil { renderGallery() } else { print("⏳ Page ready — rendering after sign-in") }
+            if session != nil { revealGallery() } else { print("⏳ Page ready — rendering after sign-in") }
 
         case "GALLERY_SCAN_START":
             let filters = payload["payload"] as? [String: Any] ?? [:]
@@ -648,6 +742,7 @@ extension ViewController: WKNavigationDelegate {
         // crash forever.
         guard processReloads < Self.maxProcessReloads else {
             print("\u{1f480} Web content process terminated again — giving up after \(processReloads) reloads")
+            pageDidFail("The gallery didn't open. Try again.")
             return
         }
 
@@ -660,13 +755,17 @@ extension ViewController: WKNavigationDelegate {
     // Without these a page that cannot be reached is a blank screen with an
     // empty console.
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        if Self.cancelled(error) { return }
         webReadyWatchdog?.cancel()
         print("❌ Could not reach \(sdkURL): \(error.localizedDescription)")
+        pageDidFail("Could not reach the gallery. Check your connection and try again.")
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        if Self.cancelled(error) { return }
         webReadyWatchdog?.cancel()
         print("❌ Navigation failed: \(error.localizedDescription)")
+        pageDidFail("Could not open the gallery. Try again.")
     }
 
     /// A version folder that was never published is sent on to the latest release;
@@ -677,6 +776,7 @@ extension ViewController: WKNavigationDelegate {
            let response = navigationResponse.response as? HTTPURLResponse,
            response.statusCode >= 400 {
             print("❌ \(response.statusCode) for \(response.url?.absoluteString ?? "?") — check sdkURL")
+            pageDidFail("The gallery didn't open (\(response.statusCode)). Try again.")
         }
         decisionHandler(.allow)
     }
@@ -983,6 +1083,9 @@ extension ViewController {
             self.lastReferenceFrames = frames.count
             self.lastReferenceIndex = chosen.index
             self.lastReferenceQuality = chosen.quality
+            self.lastReferenceQualities = chosen.qualities
+            self.lastReferenceSpread = nil
+            self.lastReferenceShift = nil
             if frames.count > 1 { print("🤳 Reference: \(chosen.note)") }
 
             // One face, looking at the camera (see `selfieMaxYawDegrees`). The page
@@ -1035,18 +1138,23 @@ extension ViewController {
             if Self.blendReferenceFrames, frames.count > 1 {
                 var blended = embedding
                 var used = [chosen.index]
+                var spread: Float = 0
                 for (index, frame) in frames.enumerated() where index != chosen.index {
                     guard let quality = chosen.qualities[index], quality >= Self.blendQualityFloor,
                           let cg = frame.cgImage, let other = recognizer.embedding(in: cg) else { continue }
+                    spread = max(spread, FaceRecognizer.distance(embedding, other))
                     blended = zip(blended, other).map { $0 + $1 }
                     used.append(index)
                 }
                 if used.count > 1 {
                     let norm = blended.reduce(0) { $0 + $1 * $1 }.squareRoot()
-                    self.referenceEmbedding = blended.map { $0 / norm }
+                    let reference = blended.map { $0 / norm }
+                    self.referenceEmbedding = reference
+                    self.lastReferenceSpread = spread
+                    self.lastReferenceShift = FaceRecognizer.distance(embedding, reference)
                     let names = used.sorted().map { String($0 + 1) }.joined(separator: ", ")
                     self.lastReferenceNote += " · blended frames \(names)"
-                    print("🤳 Reference blended from frames \(names) (quality \(Self.blendQualityFloor) and up)")
+                    print("🤳 Reference blended from frames \(names) (quality \(Self.blendQualityFloor) and up) — frames up to \(String(format: "%.3f", spread)) apart, blend \(String(format: "%.3f", self.lastReferenceShift ?? 0)) from the tapped frame")
                 }
                 self.lastReferenceBlended = used.count
             }
@@ -1255,6 +1363,25 @@ extension ViewController {
             // iCloud-only photos whose thumbnail looks like a selfie, examined after
             // the local pass — see `cloudDownloadCap`.
             var cloudCandidates: [(asset: PHAsset, n: Int)] = []
+            // Downloads started during the local pass. Each job's result lands in its box
+            // on the download queue; the scan reads them after the local pass, in order.
+            final class CloudJob { let asset: PHAsset; let n: Int; let kind: String; let group = DispatchGroup(); let box = LoadBox(); var seconds = 0.0; var previewRejected = false; var previewNote = ""; var data: Data?
+                init(asset: PHAsset, n: Int, kind: String) { self.asset = asset; self.n = n; self.kind = kind } }
+            var cloudJobs: [CloudJob] = []
+            var cloudSelfieCandidates = 0, cloudFullCandidates = 0
+            var cloudStartedSelfie = 0, cloudStartedFull = 0
+            var cloudLeft = 0
+            let cloudAllowed = Self.cloudDownloadsAllowed
+            let cloudCap = Self.cloudDownloadCap
+            // At the scan's own priority: the scan waits on these at the end, and a
+            // lower class there is a priority inversion. The queue caps what runs
+            // at once, so no thread is parked on a semaphore.
+            let cloudQueue = OperationQueue()
+            cloudQueue.name = "co.getswan.gallery.cloud"
+            cloudQueue.qualityOfService = .userInitiated
+            cloudQueue.maxConcurrentOperationCount = Self.cloudParallel
+            var cloudPreviewOut = 0
+            self?.cloudLargerDownloads = 0
             var cloudOnly = 0
             // Second head-to-toe checks at the larger render — see `lastBodyRetry`.
             var bodyRetried = 0
@@ -1508,11 +1635,48 @@ extension ViewController {
                     guard let image = loaded?.image else {
                         let note = self?.lastLoadNote ?? ""
                         if note.hasPrefix("in iCloud") { cloudOnly += 1 }
-                        // A selfie-shaped thumbnail is worth a small download; the
-                        // verdict waits for the iCloud pass. Anything else is skipped.
-                        if let thumb = self?.lastLoadThumbnail, self?.isSelfieShaped(thumb) == true {
+                        // A thumbnail shaped like a selfie or a lone standing person is worth a
+                        // download, started now within the caps and the ceiling. Anything else is skipped.
+                        if let thumb = self?.lastLoadThumbnail,
+                           let kind: String = (self?.isSelfieShaped(thumb) == true ? "selfie" : (self?.isFullLengthShaped(thumb) == true ? "full-length" : nil)) {
                             cloudCandidates.append((asset, n))
-                            if Self.verboseLogging { print("  ☁️  [\(n)] in iCloud — looks like a selfie, queued for download") }
+                            if kind == "selfie" { cloudSelfieCandidates += 1 } else { cloudFullCandidates += 1 }
+                            let started = cloudStartedSelfie + cloudStartedFull
+                            let selfieRoom = cloudCap - max(0, Self.cloudFullLengthReserve - cloudStartedFull)
+                            let fits = kind == "full-length" ? started < cloudCap : cloudStartedSelfie < selfieRoom && started < cloudCap
+                            if cloudAllowed, fits {
+                                if kind == "selfie" { cloudStartedSelfie += 1 } else { cloudStartedFull += 1 }
+                                let job = CloudJob(asset: asset, n: n, kind: kind)
+                                cloudJobs.append(job)
+                                job.group.enter()
+                                cloudQueue.addOperation {
+                                    let began = Date()
+                                    // Small copy first; the full one only for a lone person.
+                                    let preview = self?.loadFromCloudResult(asset: asset, pixels: Self.cloudPreviewPixels, timeout: Self.cloudTimeout)
+                                    let check: (passes: Bool, note: String)? = preview?.image.map { self?.cloudPreviewPasses($0, kind: kind) ?? (passes: false, note: "") }
+                                    if let check, check.passes {
+                                        var full = self?.loadFromCloudResult(asset: asset, pixels: kind == "selfie" ? Self.cloudPixels : Self.cloudFullLengthPixels, timeout: Self.cloudTimeout)
+                                        // Held as JPEG until the scan reads it: a decoded 2560px image is
+                                        // about 26MB, and dozens may wait for the local pass to end.
+                                        job.data = full?.image?.jpegData(compressionQuality: 0.92)
+                                        full?.image = nil
+                                        job.box.result = full
+                                    } else if let check {
+                                        job.previewRejected = true
+                                        job.previewNote = check.note
+                                    } else {
+                                        job.box.result = preview
+                                    }
+                                    job.seconds = Date().timeIntervalSince(began)
+                                    job.group.leave()
+                                }
+                                if Self.verboseLogging { print("  ☁️  [\(n)] in iCloud — looks like a \(kind), downloading") }
+                            } else {
+                                cloudLeft += 1
+                                noImage += 1
+                                eval.note(asset, image: nil, gate: .noImage)
+                                if Self.verboseLogging { print("  ☁️  [\(n)] in iCloud — looks like a \(kind), left (\(!cloudAllowed ? "no suitable connection" : "cap"))") }
+                            }
                             return
                         }
                         noImage += 1
@@ -1535,44 +1699,49 @@ extension ViewController {
             }
 
             // ---- iCloud pass -------------------------------------------------
-            // Selfie-shaped thumbnails, downloaded small; Wi-Fi only, capped by count and time.
+            // The downloads started during the local pass, examined like any other photo in
+            // queue order. Waits at most `cloudTail`; the rest count as left.
             var cloudDownloaded = 0
             var cloudFailed = 0
-            var cloudLeft = 0
             var cloudSeconds = 0.0
-            let cloudAllowed = Self.cloudDownloadsAllowed
-            let cloudStarted = Date()
+            let cloudPassStarted = Date()
             if !cloudCandidates.isEmpty && !cloudAllowed {
-                print("☁️  \(cloudCandidates.count) iCloud selfie(s) not downloaded — not on Wi-Fi, or Low Data Mode is on")
+                print("☁️  \(cloudCandidates.count) iCloud candidate(s) not downloaded — offline, or Low Data Mode is on")
             }
-            for candidate in cloudCandidates {
+            let deadline = cloudPassStarted.addingTimeInterval(Self.cloudTail)
+            for job in cloudJobs {
                 guard self?.scanGeneration == generation else {
                     print("\u{1f6d1} Scan superseded — stopping in the iCloud pass")
                     return
                 }
-                let withinBudget = Date().timeIntervalSince(cloudStarted) < Self.cloudTimeBudget
-                guard cloudAllowed, withinBudget, cloudDownloaded + cloudFailed < Self.cloudDownloadCap else {
+                let wait = max(0, deadline.timeIntervalSinceNow)
+                guard job.group.wait(timeout: .now() + wait) == .success else {
                     cloudLeft += 1
                     noImage += 1
-                    eval.note(candidate.asset, image: nil, gate: .noImage)
+                    eval.note(job.asset, image: nil, gate: .noImage)
+                    if Self.verboseLogging { print("  ☁️  [\(job.n)] \(job.kind) still downloading at the deadline — left") }
+                    continue
+                }
+                cloudSeconds += job.seconds
+                if job.previewRejected {
+                    cloudPreviewOut += 1
+                    if Self.verboseLogging { print("  ☁️  [\(job.n)] \(job.kind) — small copy: \(job.previewNote), full download skipped") }
                     continue
                 }
                 autoreleasepool {
-                    let started = Date()
-                    let image = self?.loadFromCloud(asset: candidate.asset, pixels: Self.cloudPixels, timeout: Self.cloudTimeout)
-                    cloudSeconds += Date().timeIntervalSince(started)
-                    guard let image else {
+                    if let data = job.data { job.box.result?.image = UIImage(data: data); job.data = nil }
+                    self?.applyLoad(job.box.result)
+                    guard let image = job.box.result?.image else {
                         cloudFailed += 1
                         noImage += 1
-                        eval.note(candidate.asset, image: nil, gate: .noImage)
-                        if Self.verboseLogging { print("  ☁️  [\(candidate.n)] \(self?.lastLoadNote ?? "iCloud download failed")") }
+                        eval.note(job.asset, image: nil, gate: .noImage)
+                        if Self.verboseLogging { print("  ☁️  [\(job.n)] \(job.box.result?.note ?? "iCloud download failed")") }
                         return
                     }
                     cloudDownloaded += 1
-                    if Self.verboseLogging, let cg = image.cgImage { print("  ☁️  [\(candidate.n)] downloaded \(cg.width)x\(cg.height) in \(String(format: "%.1f", Date().timeIntervalSince(started)))s") }
-                    examine(candidate.asset, image, n: candidate.n)
-                    // Keeps the page's stall timer quiet while this pass runs; the
-                    // bar is already full, so only the message matters.
+                    if Self.verboseLogging, let cg = image.cgImage { print("  ☁️  [\(job.n)] \(job.kind) downloaded \(cg.width)x\(cg.height) in \(String(format: "%.1f", job.seconds))s") }
+                    examine(job.asset, image, n: job.n)
+                    // Keeps the page's stall timer quiet while this pass runs.
                     DispatchQueue.main.async {
                         self?.sendToWeb(["type": "onGalleryScanProgress",
                                          "payload": ["done": total, "total": total]])
@@ -1634,7 +1803,7 @@ extension ViewController {
                 no image    \(noImage)   (in iCloud with no usable copy on the phone, or unreadable)
                 skipped     \(skippedShape)   (from the library record alone: too small to scan, or a panorama)
                 local copy  \(localCopies)   (in iCloud, scanned from the phone's smaller copy)
-                iCloud      \(cloudOnly) only in iCloud; \(cloudCandidates.count) looked like selfies; \(cloudDownloaded) downloaded in \(String(format: "%.1f", cloudSeconds))s, \(cloudFailed) failed, \(cloudLeft) left (cap \(Self.cloudDownloadCap), \(Int(Self.cloudTimeBudget))s, Wi-Fi only\(cloudAllowed ? "" : " — was not on Wi-Fi"))
+                iCloud      \(cloudOnly) only in iCloud; \(cloudSelfieCandidates) looked like selfies, \(cloudFullCandidates) like a full-length photo; \(cloudDownloaded) downloaded (\(String(format: "%.1f", cloudSeconds))s of download time), \(cloudPreviewOut) dropped on the small copy, \(cloudFailed) failed, \(cloudLeft) left (cap \(cloudCap)\(Self.cloudOnMobile ? " on mobile data" : " on Wi-Fi"), wait \(Int(Self.cloudTail))s after the local pass\(cloudAllowed ? "" : " — no suitable connection"))
                 no face     \(noFace)
                 group       \(groupSkipped)   (skipped: more than one face; \(sameShopper) more had several faces all the shopper's and went on)
                 others      \(otherPeople)   (skipped: someone else in the photo)
@@ -1702,10 +1871,18 @@ extension ViewController {
                 summary["chosenFrame"] = (self?.lastReferenceIndex ?? 0) + 1
                 summary["referenceQuality"] = self?.lastReferenceQuality
                 summary["blendedFrames"] = self?.lastReferenceBlended ?? 1
+                // Per-frame quality (-1 when none was measured), and how the blend sat.
+                summary["frameQualities"] = (self?.lastReferenceQualities ?? []).map { $0 ?? -1 }
+                summary["blendSpread"] = self?.lastReferenceSpread
+                summary["blendShift"] = self?.lastReferenceShift
                 summary["elapsedMs"] = Int(elapsed * 1000)
                 summary["photosPerSecond"] = Int(rate)
                 summary["inCloud"] = cloudOnly
-                summary["cloudSelfies"] = cloudCandidates.count
+                summary["cloudSelfies"] = cloudSelfieCandidates
+                summary["cloudFullLength"] = cloudFullCandidates
+                summary["cloudOnMobile"] = Self.cloudOnMobile
+                summary["cloudPreviewOut"] = cloudPreviewOut
+                summary["cloudLargerDownloads"] = self?.cloudLargerDownloads ?? 0
                 summary["cloudDownloaded"] = cloudDownloaded
                 summary["cloudFailed"] = cloudFailed
                 summary["cloudLeft"] = cloudLeft
@@ -1734,7 +1911,8 @@ extension ViewController {
                                              // What the scan could not look at, for
                                              // analytics — the page shows none of it.
                                              "skipped": ["inCloud": cloudOnly,
-                                                         "cloudSelfies": cloudCandidates.count,
+                                                         "cloudSelfies": cloudSelfieCandidates,
+                                                         "cloudFullLength": cloudFullCandidates,
                                                          "cloudDownloaded": cloudDownloaded,
                                                          "cloudLeft": cloudLeft,
                                                          "noImage": noImage],
@@ -2118,10 +2296,16 @@ struct MuseScore {
     var note: String {
         let seen = labels.filter { $0.value >= 0.3 }.sorted { $0.value > $1.value }.prefix(2)
             .map { String(format: "%@ %.2f", $0.key, $0.value) }.joined(separator: " ")
-        let extras = [expression?.note, seen.isEmpty ? nil : "labels " + seen, handOnFace ? "hand on face" : nil, capped ? "cap ×\(Self.capMultiplier)" : nil, smile == .closed ? "closed smile ×\(Self.closedSmileMultiplier)" : nil, smile == .open ? "open smile ×\(Self.openSmileMultiplier)" : nil, wideEyed ? "wide-eyed ×\(Self.wideEyedMultiplier)" : nil, lowered.isEmpty ? nil : lowered.map { "\($0) ×\(Self.loweredMultiplier)" }.joined(separator: "; "),
-                      dressy ? "\(outfit.label ?? "dressy") \(String(format: "%.2f", outfit.dressy)) ×\(Self.outfitMultiplier)" : nil,
-                      busy ? "busy torso \(String(format: "%.2f", outfit.busy)) ×\(Self.outfitMultiplier)" : nil]
-            .compactMap { $0 }.joined(separator: "; ")
+        // In pieces: one literal this long is more than the type-checker will take.
+        var extraParts: [String?] = [expression?.note, seen.isEmpty ? nil : "labels " + seen, handOnFace ? "hand on face" : nil]
+        extraParts.append(capped ? "cap ×\(Self.capMultiplier)" : nil)
+        extraParts.append(smile == .closed ? "closed smile ×\(Self.closedSmileMultiplier)" : nil)
+        extraParts.append(smile == .open ? "open smile ×\(Self.openSmileMultiplier)" : nil)
+        extraParts.append(wideEyed ? "wide-eyed ×\(Self.wideEyedMultiplier)" : nil)
+        extraParts.append(lowered.isEmpty ? nil : lowered.map { "\($0) ×\(Self.loweredMultiplier)" }.joined(separator: "; "))
+        extraParts.append(dressy ? "\(outfit.label ?? "dressy") \(String(format: "%.2f", outfit.dressy)) ×\(Self.outfitMultiplier)" : nil)
+        extraParts.append(busy ? "busy torso \(String(format: "%.2f", outfit.busy)) ×\(Self.outfitMultiplier)" : nil)
+        let extras = extraParts.compactMap { $0 }.joined(separator: "; ")
         if let filter { return String(format: "score=0 (%@)%@", filter, extras.isEmpty ? "" : "  " + extras) }
         let detail = parts.map { String(format: "%@ %.2f", $0.name, $0.value) }.joined(separator: " ")
         return String(format: "score=%.2f [%@]%@", value, detail, extras.isEmpty ? "" : "  " + extras)
@@ -2463,13 +2647,26 @@ struct ScanEval {
             let expr = record.score?.expression
             let hat = record.score?.labels.filter { MuseScore.hatLabels.contains($0.key) }.values.max()
             // In pieces: one literal this long is more than the type-checker will take.
-            let scoreParts: [String] = MuseScore.weights.map { w in number(record.score?.parts.first { $0.name == w.name }.map { Double($0.value) }) }
-            let exprFields: [String] = [
-                number(expr.map { Double($0.smile) }), number(expr.map { Double($0.jawOpen) }),
-                number(expr.map { Double($0.blinkLeft) }), number(expr.map { Double($0.blinkRight) }),
-                number(expr.map { Double($0.browUp) }), number(expr.map { Double($0.squint) }),
-                number(expr.map { Double($0.eyeWide) }), number(expr.map { Double($0.teeth) }),
-            ]
+            let parts: [(name: String, value: Float)] = record.score?.parts ?? []
+            var scoreParts: [String] = []
+            for w in MuseScore.weights {
+                let found = parts.first(where: { $0.name == w.name })
+                let value: Double? = found.map { Double($0.value) }
+                scoreParts.append(number(value))
+            }
+            func exprNumber(_ pick: (FaceExpression) -> Float) -> String {
+                let value: Double? = expr.map { Double(pick($0)) }
+                return number(value)
+            }
+            var exprFields: [String] = []
+            exprFields.append(exprNumber { $0.smile })
+            exprFields.append(exprNumber { $0.jawOpen })
+            exprFields.append(exprNumber { $0.blinkLeft })
+            exprFields.append(exprNumber { $0.blinkRight })
+            exprFields.append(exprNumber { $0.browUp })
+            exprFields.append(exprNumber { $0.squint })
+            exprFields.append(exprNumber { $0.eyeWide })
+            exprFields.append(exprNumber { $0.teeth })
             let flagFields: [String] = [
                 number(record.score?.labels["sunglasses"].map { Double($0) }), number(hat.map { Double($0) }),
                 record.score.map { String($0.handOnFace) } ?? "", record.score.map { String($0.capped) } ?? "",
@@ -3421,6 +3618,8 @@ extension ViewController {
         var rotated = false
         var localCopy = false
         var thumbnail: UIImage?
+        /// Came down from iCloud in this scan, so a bigger copy must come the same way.
+        var fromCloud = false
     }
     final class LoadBox { var result: LoadResult? }
 
@@ -3428,6 +3627,7 @@ extension ViewController {
         lastLoadNote = loaded?.note ?? ""
         lastLoadRotated = loaded?.rotated ?? false
         lastLoadLocalCopy = loaded?.localCopy ?? false
+        lastLoadFromCloud = loaded?.fromCloud ?? false
         lastLoadThumbnail = loaded?.thumbnail
     }
     func loadPhoto(asset: PHAsset, pixels: CGFloat = ViewController.loadPixels) -> UIImage? {
@@ -3501,8 +3701,15 @@ extension ViewController {
     /// Downloads a reduced copy of a photo whose full version is in iCloud. Only
     /// the iCloud pass calls this; asynchronous so the wait can be bounded.
     func loadFromCloud(asset: PHAsset, pixels: CGFloat, timeout: DispatchTimeInterval) -> UIImage? {
-        lastLoadLocalCopy = false
-        lastLoadThumbnail = nil
+        let loaded = loadFromCloudResult(asset: asset, pixels: pixels, timeout: timeout)
+        applyLoad(loaded)
+        return loaded.image
+    }
+
+    /// The download itself, touching no state on the controller, so it can run on a
+    /// download queue while the scan goes on.
+    func loadFromCloudResult(asset: PHAsset, pixels: CGFloat, timeout: DispatchTimeInterval) -> LoadResult {
+        var out = LoadResult()
         let options = PHImageRequestOptions()
         options.deliveryMode = .highQualityFormat
         options.resizeMode = .exact
@@ -3521,12 +3728,14 @@ extension ViewController {
         }
         if done.wait(timeout: .now() + timeout) == .timedOut {
             PHImageManager.default().cancelImageRequest(request)
-            lastLoadNote = "iCloud download timed out"
-            return nil
+            out.note = "iCloud download timed out"
+            return out
         }
-        if result == nil { lastLoadNote = "iCloud download failed" }
-        lastLoadRotated = result.map { $0.imageOrientation != .up } ?? false
-        return result.map(Self.upright)
+        if result == nil { out.note = "iCloud download failed" }
+        out.rotated = result.map { $0.imageOrientation != .up } ?? false
+        out.image = result.map(Self.upright)
+        out.fromCloud = true
+        return out
     }
 
     /// Whether a thumbnail shows one face filling the frame, the shape of a selfie,
@@ -3540,6 +3749,34 @@ extension ViewController {
         let mainWidth = faces.map(\.boundingBox.width).max() ?? 0
         let company = faces.filter { $0.boundingBox.width >= mainWidth * Self.bystanderRatio }
         return company.count == 1 && Self.faceRatio(boxWidth: mainWidth, in: cgImage) >= Self.selfieFaceRatio
+    }
+
+    /// Whether a thumbnail shows one person standing tall in the frame, the shape of a
+    /// full-length photo. Whose body it is, the download and the face match decide.
+    func isFullLengthShaped(_ image: UIImage) -> Bool {
+        guard let cgImage = image.cgImage else { return false }
+        let request = VNDetectHumanRectanglesRequest()
+        request.upperBodyOnly = false
+        try? VNImageRequestHandler(cgImage: cgImage, orientation: Self.cgOrientation(image.imageOrientation), options: [:])
+            .perform([request])
+        guard let people = request.results, !people.isEmpty else { return false }
+        let tallest = people.map(\.boundingBox.height).max() ?? 0
+        let company = people.filter { $0.boundingBox.height >= tallest * Self.bystanderRatio }
+        return company.count == 1 && tallest >= Self.cloudPersonHeight
+    }
+
+    /// Second look at a candidate on its small copy before the full download: at
+    /// most one face, and the same shape test as the thumbnail, now with pixels
+    /// enough to tell a group from one person.
+    func cloudPreviewPasses(_ image: UIImage, kind: String) -> (passes: Bool, note: String) {
+        guard let cgImage = image.cgImage else { return (false, "unreadable") }
+        let faces = VNDetectFaceRectanglesRequest()
+        try? VNImageRequestHandler(cgImage: cgImage, orientation: Self.cgOrientation(image.imageOrientation), options: [:])
+            .perform([faces])
+        let faceCount = faces.results?.count ?? 0
+        guard faceCount <= 1 else { return (false, "\(faceCount) faces") }
+        let shaped = kind == "selfie" ? isSelfieShaped(image) : isFullLengthShaped(image)
+        return (shaped, shaped ? "\(faceCount) face" : "\(faceCount) face, not one standing person")
     }
 
     /// The largest face Vision finds, or nil.
@@ -3753,6 +3990,15 @@ extension ViewController {
                 largerLoaded = true
                 largerCache = loadPhoto(asset: asset, pixels: Self.fullResPixels)?.cgImage
                     .flatMap { $0.width > cgImage.width ? $0 : nil }
+                // A photo that came from iCloud has no bigger copy on the phone. Fetch
+                // one just large enough for the face floor, not the full original.
+                if largerCache == nil, lastLoadFromCloud, Self.cloudDownloadsAllowed {
+                    let ratio = faces.map(\.boundingBox.width).max() ?? 0
+                    let needed = min(Self.fullResPixels, max(Self.loadPixels * 1.5, Self.minFacePixels / max(ratio, 0.01) * 1.25))
+                    largerCache = loadFromCloudResult(asset: asset, pixels: needed, timeout: Self.cloudTimeout).image?.cgImage
+                        .flatMap { $0.width > cgImage.width ? $0 : nil }
+                    if largerCache != nil { cloudLargerDownloads += 1 }
+                }
             }
             return largerCache
         }
@@ -3760,11 +4006,17 @@ extension ViewController {
         // The larger render is loaded only when the original is big enough to clear
         // the floor, so a photo small in every copy costs nothing extra.
         let widestRatio = faces.map(\.boundingBox.width).max() ?? 0
+        // For a photo that came from iCloud the bigger copy is another download, so
+        // the floor waits until the face has matched: a stranger costs nothing more.
+        var floorDeferred = false
         if widest < Self.minFacePixels {
-            guard widestRatio * CGFloat(asset.pixelWidth) >= Self.minFacePixels,
-                  let larger = largerRender(),
-                  widestRatio * CGFloat(larger.width) >= Self.minFacePixels
-            else { return .faceTooSmall(pixels: Int(widest)) }
+            guard widestRatio * CGFloat(asset.pixelWidth) >= Self.minFacePixels else { return .faceTooSmall(pixels: Int(widest)) }
+            if lastLoadFromCloud {
+                floorDeferred = true
+            } else {
+                guard let larger = largerRender(), widestRatio * CGFloat(larger.width) >= Self.minFacePixels
+                else { return .faceTooSmall(pixels: Int(widest)) }
+            }
         }
 
         // After the face gates on purpose: pose detection is the most expensive
@@ -3868,8 +4120,14 @@ extension ViewController {
 
         // A small face is re-cropped from the larger render. Only photos past every
         // gate get here, a handful per scan; the face box is normalised, so it fits.
+        let matchedSoFar = ((quick ?? score(from: cgImage))?.distances.min() ?? 1) < Self.matchThreshold
+        if floorDeferred, matchedSoFar {
+            guard let larger = largerRender(), widestRatio * CGFloat(larger.width) >= Self.minFacePixels
+            else { return .faceTooSmall(pixels: Int(widest)) }
+        }
         var source = cgImage
-        if widest < Self.fullResFaceBelow, let larger = largerRender() {
+        // A downloaded photo fetches its bigger copy only once the face has matched.
+        if widest < Self.fullResFaceBelow, !lastLoadFromCloud || matchedSoFar, let larger = largerRender() {
             source = larger
             lastCropFullRes = true
         }

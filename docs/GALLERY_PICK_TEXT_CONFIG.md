@@ -14,7 +14,7 @@ Every page's text lives under that page's name. You change what you want, ignore
 
 ```js
 config.content.galleryPick = {
-  entryPage: {
+  introPage: {
     headingTitle:    "Create your Acme twin.",
     subHeadingTitle: "Take a selfie and pick a few photos.",
     buttonText:      "Get started",
@@ -25,7 +25,7 @@ config.content.galleryPick = {
 }
 ```
 
-That's it. **56 names**: 48 across the 13 pages, plus 8 shared buttons and notes.
+That's it. **77 names**: 69 across the 14 pages, plus 8 shared buttons and notes. Two of the 69 are optional overrides for generated headings (see §4).
 
 **Every value is plain text.** No codes, no placeholders, no formatting rules.
 
@@ -39,7 +39,8 @@ That's it. **56 names**: 48 across the 13 pages, plus 8 shared buttons and notes
     galleryPick: {
 
       common:             { …}   // buttons & notes that appear on many pages
-      entryPage:          { …}
+      landingPage:        { …}   // the first screen: one button
+      introPage:          { …}   // the drawer that introduces the flow
       genderPage:         { …}   // shown only when the host sends no gender
       heightPage:         { …}
       selfiePage:         { …}
@@ -80,7 +81,7 @@ That's it. **56 names**: 48 across the 13 pages, plus 8 shared buttons and notes
   config={{
     content: {
       galleryPick: {
-        entryPage:  { headingTitle: "Create your Acme twin.", buttonText: "Get started" },
+        introPage:  { headingTitle: "Create your Acme twin.", buttonText: "Get started" },
         pickerPage: { buttonText: "Build my twin" },
       },
     },
@@ -101,7 +102,7 @@ Nothing new to wire up — it travels inside the `config` you already send:
     "config": {
       "content": {
         "galleryPick": {
-          "entryPage": { "headingTitle": "Create your Acme twin." },
+          "introPage": { "headingTitle": "Create your Acme twin." },
           "pickerPage": { "buttonText": "Build my twin" }
         }
       }
@@ -136,10 +137,24 @@ Change once, changes everywhere.
 | `retryButton` | Retry |
 | `openSettingsButton` | Open Settings |
 | `cameraStartingButton` | Starting camera… |
+| `switchCameraText` | Switch camera |
 
 ---
 
-### `entryPage`
+### `landingPage`
+
+The first screen: the Muse picture with one button over it. Tapping the
+button slides the intro drawer up.
+
+| Name | Current text |
+|---|---|
+| `buttonText` | Discover on you |
+
+---
+
+### `introPage`
+
+The drawer that slides up over the landing screen.
 
 ```
 ┌───────────────────────────┐
@@ -277,6 +292,11 @@ looking at the camera — the user returns to this screen with the matching
 |---|---|
 | `headingTitle` | Finding your photos. |
 | `subHeadingTitle` | We're looking for photos of you. This happens on your phone. |
+| `progressPreText` | Looking through your photos… |
+| `progressPostText` | (empty) |
+
+The progress line reads `progressPreText 13 of 1567 progressPostText`. The count and
+its `of` come from the scan and stay as they are; an empty piece leaves no extra space.
 
 > The footer line comes from `common.keepAppOpenNote` — the picker shows the same line
 > while a scan is still running, so it is shared rather than owned by this page.
@@ -294,7 +314,7 @@ looking at the camera — the user returns to this screen with the matching
 │ └───────────────────────┘ │
 │ ▣ ▣ ▣                     │
 │ ▣ ▣ ▣  (your photos)      │
-│ [   Add more photos   ]←──┼── addMoreButtonText
+│ [  Load more photos   ]←──┼── loadMoreButtonText / loadingMoreButtonText
 │ ───────────────────────── │
 │ [   Build my Muse     ]←──┼── buttonText
 │ Front and side must... ←──┼── (not editable — see §5)
@@ -306,11 +326,21 @@ looking at the camera — the user returns to this screen with the matching
 | `subHeadingTitle` | Albums › People & Pets has all your photos of you in one place. |
 | `buttonText` | Build my Muse |
 | `takePhotoButtonText` | Take it now |
-| `addMoreButtonText` | Add more photos |
+| `loadMoreButtonText` | Load more photos |
+| `loadingMoreButtonText` | Looking… |
 | `scanningHeadingTitle` | Finding your photos. |
 | `scanningSubHeadingTitle` | Picking opens once the search is done. |
 | `scanningStatusText` | Still looking for more photos of you… |
+| `scanningStatusPostText` | (empty) |
 | `limitReachedText` | That's as many photos as we can take. |
+| `picksChoosingTitle` | Picking for you… |
+| `picksTitle` | Picked for you |
+
+`loadMoreButtonText` is one label for one idea, get me more photos: behind it
+the flow either reopens the system picker or searches further back, and
+`loadingMoreButtonText` replaces it while that runs. The two `picks*` titles sit
+over the pre-selection row, which is switched off in the current build, so they
+are accepted but not shown.
 
 **One extra name, with no fixed default:**
 
@@ -439,7 +469,7 @@ An overlay inside the camera frame. Which line shows depends on why the camera f
 
 ## 5. What stays in the code
 
-The flow holds about 110 strings. 56 are configurable; the rest stay put, each for a
+The flow holds about 130 strings. 77 are configurable; the rest stay put, each for a
 reason. Nothing here is an oversight — ask and any row can be opened up later.
 
 | What stays | Example | Why |
@@ -481,9 +511,13 @@ sentence with your own. See §4.
         "tryAgainButton": "Try again",
         "retryButton": "Retry",
         "openSettingsButton": "Open Settings",
-        "cameraStartingButton": "Starting camera…"
+        "cameraStartingButton": "Starting camera…",
+        "switchCameraText": "Switch camera"
       },
-      "entryPage": {
+      "landingPage": {
+        "buttonText": "Discover on you"
+      },
+      "introPage": {
         "headingTitle": "Create your Muse.",
         "subHeadingTitle": "Take a selfie & pick a few photos. We measure you & build your twin. Then see anything, in your size, on you.",
         "buttonText": "Start",
@@ -507,21 +541,40 @@ sentence with your own. See §4.
         "buttonText": "Use this photo",
         "captionText": "Position your face in the frame",
         "footerText": "Your selfie is used only to find your photos.",
-        "permissionText": "Next, your phone will ask about photo access. Allow Full Access so we can find your pictures — nothing leaves your phone until you approve it."
+        "permissionText": "Next, your phone will ask about photo access. Allow Full Access so we can find your pictures — nothing leaves your phone until you approve it.",
+        "guidePreparingCaption": "Preparing face guide…",
+        "guideUnavailableCaption": "Position your face in the frame and look straight at the camera",
+        "guidePosition": "Position your whole face inside the oval",
+        "guideLowLight": "Not enough light. Turn towards a lamp or window.",
+        "guideCloser": "Move closer",
+        "guideFarther": "Move farther away",
+        "guideCenter": "Move your face to the center",
+        "guideFitWholeFace": "Fit your whole face inside the oval",
+        "guidePerfect": "Perfect! Hold still",
+        "retakeNoFace": "We couldn’t see a face in that photo. Try again in better light.",
+        "retakeSeveralFaces": "Only you should be in the selfie. Try again on your own.",
+        "retakeNotFrontal": "Look straight at the camera and try again.",
+        "retakeBlurry": "That one came out blurred. Hold still and try again."
       },
       "searchingPage": {
         "headingTitle": "Finding your photos.",
-        "subHeadingTitle": "We're looking for photos of you. This happens on your phone."
+        "subHeadingTitle": "We're looking for photos of you. This happens on your phone.",
+        "progressPreText": "Looking through your photos…",
+        "progressPostText": ""
       },
       "pickerPage": {
         "subHeadingTitle": "Albums › People & Pets has all your photos of you in one place.",
         "buttonText": "Build my Muse",
         "takePhotoButtonText": "Take it now",
-        "addMoreButtonText": "Add more photos",
+        "loadMoreButtonText": "Load more photos",
+        "loadingMoreButtonText": "Looking…",
         "scanningHeadingTitle": "Finding your photos.",
         "scanningSubHeadingTitle": "Picking opens once the search is done.",
         "scanningStatusText": "Still looking for more photos of you…",
-        "limitReachedText": "That's as many photos as we can take."
+        "scanningStatusPostText": "",
+        "limitReachedText": "That's as many photos as we can take.",
+        "picksChoosingTitle": "Picking for you…",
+        "picksTitle": "Picked for you"
       },
       "capturePage": {
         "headingTitle": "Three quick photos.",

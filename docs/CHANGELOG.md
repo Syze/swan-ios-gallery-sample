@@ -20,7 +20,86 @@ onwards; those entries are kept for reference and need nothing on your side.
 
 ---
 
-## [1.3.0] — unreleased
+## [1.3.2] — released
+
+**Mobile iOS only.** The npm package is unchanged. **Controller: update
+recommended.** The 1.3.0 and 1.3.1 controllers keep working with this page;
+without the update, the four controller points below do not apply.
+
+```
+https://swan-mobile-web-component.swan.so/v1.3.2/index.html
+```
+
+### Controller
+
+- **Photos that are only in iCloud are searched too.** During the scan, iCloud
+  photos whose thumbnail looks like a selfie or one standing person are
+  fetched: a 30 KB copy first to confirm one person, then the photo itself
+  (1536 px for a selfie, 2560 px for a standing shot). Up to 100 on Wi-Fi, 50
+  on mobile data, none in Low Data Mode. The scan waits at most 30 seconds
+  after the local pass for downloads still in progress. Downloads are held
+  compressed until the scan reads them. `onGalleryScanComplete` `skipped` and
+  `summary` gain `cloudFullLength`, `cloudPreviewOut`, `cloudLargerDownloads`
+  and `cloudOnMobile`.
+- **The sign-in screen waits for the page.** The web view is created after
+  Continue and the sign-in screen stays up, with a spinner, until the page
+  reports ready. If the page fails or takes more than 30 seconds, the screen
+  shows the reason and a Try again that reloads the page only.
+- **Selfie frames are reported.** `summary` gains `frameQualities`,
+  `blendSpread` and `blendShift`, so a reference built from the wrong frames
+  can be seen in analytics.
+- **Scan memory is reported** as `memoryPeakMB` in `summary`.
+
+### Changed
+
+- **The selfie guide runs on the CPU (wasm) instead of WebGL.** The first run
+  on a new phone no longer compiles shaders, which took 14 to 20 seconds on
+  test phones; the guide is ready in under 100 ms and each check is faster.
+
+---
+
+## [1.3.1] — 2026-10-22
+
+**Mobile iOS only.** The npm package is unchanged. **Controller: no update
+needed.**
+
+```
+https://swan-mobile-web-component.swan.so/v1.3.1/index.html
+```
+
+### Changed
+
+- **Building a Muse waits up to 10 minutes,** up from 6, before reporting "The
+  build is taking longer than expected." Builds that take longer than six
+  minutes now finish on screen instead of failing.
+
+### Added
+
+- **Text around the photo count.** The search progress line, "Looking through
+  your photos… 13 of 1567", takes `searchingPage.progressPreText` before the
+  count and `progressPostText` after it. On the picker, `scanningStatusText`
+  stays the text before the count and `scanningStatusPostText` is added after
+  it. Defaults keep today's wording.
+- **Rear camera for the photos taken in the flow.** The three photos taken
+  when no match is found, and "Take it now" for a missing selfie, front or side
+  photo, get a switch between the front and rear camera. The front camera stays
+  the default; on the rear one the photo is taken at once, with no countdown,
+  since someone else is holding the phone. The first selfie, the one photos are
+  matched against, stays on the front camera. The switch shows only on phones
+  with two cameras; `common.switchCameraText` labels it. `camera_opened` now
+  says which camera opened.
+
+### Fixed
+
+- **Photos taken in the flow were cut to a square.** The camera was asked for a
+  square picture, so a full-length front or side photo lost the head or the
+  feet. These photos now keep the camera's upright shape. The first selfie,
+  used only for its face, is unchanged. Each photo taken is reported as
+  `camera_capture`, with its size, the camera and the shot.
+
+---
+
+## [1.3.0] — 2026-10-22
 
 **Mobile iOS only.** The npm package is unchanged.
 
@@ -72,12 +151,13 @@ https://swan-mobile-web-component.swan.so/v1.3.0/index.html
 - A guide oval over the camera: one hint at a time, green when the face fits,
   and the button enables only then. Green holds through small movements. In
   a dark room the screen lights the face and flashes white on capture.
-- A selfie with another person in it, or looking away, is sent back for a
-  retake with the reason shown. New `onGalleryScanComplete` errors:
-  `several-faces-in-selfie`, `selfie-not-frontal`.
-- Two silent frames are taken while the face fits, and the sharpest of the
-  three is used for matching. The tapped one stays the selfie the user sees.
-  New `GALLERY_SCAN_START` field `referenceImages`.
+- A selfie with another person in it, looking away, or too blurred to match
+  from is sent back for a retake with the reason shown. New
+  `onGalleryScanComplete` errors: `several-faces-in-selfie`,
+  `selfie-not-frontal`, `selfie-too-blurry`.
+- Two silent frames are taken while the face fits, and the three are combined
+  into one steady reference for matching. The tapped one stays the selfie the
+  user sees. New `GALLERY_SCAN_START` field `referenceImages`.
 - New text keys under `selfiePage` for the hints and retake reasons.
 
 ### Other

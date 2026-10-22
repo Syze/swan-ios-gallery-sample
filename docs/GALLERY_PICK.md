@@ -558,7 +558,7 @@ iOS for more library photos has to keep it.
 | `RENDER_COMPONENT` | `{ componentName: "GalleryPick", props: { … } }` — see [Rendering the component](#rendering-the-component) |
 | `onGalleryMatchFound` | `{ assetId, type, isFullBody, distance?, score?, dupGroup?, done, total }` — `distance` is the host's match distance, lower is closer; `score` is the host's ranking of the photo for the Muse, higher is better, with clean faces at 0.5 and above and demoted ones below; `dupGroup` is shared by photos that repeat one shot. The picker pre-selects the top-ranked photo of each type, one per `dupGroup`: by `score` when sent, else the closest by `distance`, else the newest. |
 | `onGalleryScanProgress` | `{ done, total }` |
-| `onGalleryScanComplete` | `{ assetIds, dropped?, limited?, denied?, error?, skipped?, summary? }` — `dropped` names matches the host withdrew once the whole pass was scored; the page removes those tiles if it ever showed them. A host holds borderline matches back rather than streaming them, so in practice `assetIds` only adds tiles, appended after the streamed ones, and `dropped` names ids the page never saw. Absent from hosts that predate it. `skipped` is `{ inCloud, cloudSelfies, cloudDownloaded, cloudLeft, noImage }`, counts of what the scan could not look at. `summary` is the scan's whole tally as numbers: photos examined, each gate's count (no face, group, other people, face too small, not full body, no match, sensitive, unusable face, too large), the matcher's name and cut-off, the closest rejected distance and near misses, matches by type, the selfie frames chosen from, and timings. Counts only, no ids. Both are reported to analytics only; nothing is shown to the user. |
+| `onGalleryScanComplete` | `{ assetIds, dropped?, limited?, denied?, error?, skipped?, summary? }` — `dropped` names matches the host withdrew once the whole pass was scored; the page removes those tiles if it ever showed them. A host holds borderline matches back rather than streaming them, so in practice `assetIds` only adds tiles, appended after the streamed ones, and `dropped` names ids the page never saw. Absent from hosts that predate it. `skipped` is `{ inCloud, cloudSelfies, cloudFullLength, cloudDownloaded, cloudLeft, noImage }`, counts of what the scan could not look at (photos only in iCloud, how many of those looked like a selfie or a full-length photo from their thumbnail, how many were downloaded in full after a small copy confirmed one person, how many were left by the cap or still downloading when the wait after the local scan ran out). `summary` is the scan's whole tally as numbers: photos examined, each gate's count (no face, group, other people, face too small, not full body, no match, sensitive, unusable face, too large), the matcher's name and cut-off, the closest rejected distance and near misses, matches by type, the selfie frames chosen from, and timings. Counts only, no ids. Both are reported to analytics only; nothing is shown to the user. |
 | `onGalleryPhotoAnalysis` | `{ assetId, type, isFullBody, captured? }` |
 | `onGalleryFullImage` | `{ id, dataURI, original, hasVideo? }` or `{ id, error }` |
 | `onGalleryThumbnails` | `{ thumbs: [{ id, dataURI }] }` |
@@ -1055,10 +1055,45 @@ Every release has its own address, for example
   reference host logs it.
 - **Each release says whether `ViewController.swift` needs updating.**
 
-### 1.3.0 — unreleased
+### 1.3.2 — unreleased
+
+**Controller:** update recommended. The 1.3.0 and 1.3.1 `ViewController.swift`
+still work; without the update, photos that are only in iCloud are not searched
+and the sign-in screen does not wait for the page. The full list is in
+`CHANGELOG.md`.
+
+**Flow**
+
+- Photos that are only in iCloud are searched: a small copy confirms one person,
+  then the photo is fetched and matched like a local one, within a cap and a
+  30 second wait after the local pass.
+- The selfie guide runs on the CPU (wasm): no first-run shader compile.
+
+**Setup**
+
+- `onGalleryScanComplete` `skipped` gains `cloudFullLength`; `summary` gains
+  `cloudPreviewOut`, `cloudLargerDownloads`, `cloudOnMobile`, `frameQualities`,
+  `blendSpread`, `blendShift`, `memoryPeakMB`.
+
+### 1.3.1 — 22 October 2026
+
+**Controller:** no update needed.
+
+**Flow**
+
+- The three photos taken in the flow, and "Take it now", get a front/rear camera
+  switch. Muse builds wait up to 10 minutes.
+
+**Setup**
+
+- New text keys: `searchingPage.progressPreText`, `progressPostText`,
+  `pickerPage.scanningStatusPostText` — see `GALLERY_PICK_TEXT_CONFIG.md`.
+
+### 1.3.0 — 22 October 2026
 
 **Controller:** update recommended. The 1.2.0 `ViewController.swift` still works;
-without the update the two selfie checks below do not run.
+without the update the selfie checks, the face matching and the ranking below do
+not run. The full list, and the files to add, are in `CHANGELOG.md`.
 
 **Flow**
 
@@ -1067,8 +1102,12 @@ without the update the two selfie checks below do not run.
   room the screen flashes white as the photo is taken. If the guide cannot
   start, the plain camera is shown and the button enables anyway.
 - After the shot, the controller sends the selfie back for a retake when it is
-  not one face looking at the camera, with the reason shown on the selfie
-  screen.
+  not one face looking at the camera, or too blurred to match from, with the
+  reason shown on the selfie screen.
+- Photos are matched on the face with a model on the phone, scored for the
+  Muse, and the best of each type is pre-selected when the scan ends. Repeated
+  shots are pre-selected once. Photos with sunglasses, a hand over the face or
+  closed eyes are left out; caps, smiles, wide eyes and open mouths rank lower.
 - Results keep the order they were found in, newest first; nothing moves when
   the scan finishes.
 - Three selfie frames reach the controller — two taken silently while the face
@@ -1080,7 +1119,9 @@ without the update the two selfie checks below do not run.
 - New `selfiePage` text keys for the guide hints and the retake reasons — see
   `GALLERY_PICK_TEXT_CONFIG.md`.
 - New `onGalleryScanComplete` errors: `several-faces-in-selfie`,
-  `selfie-not-frontal`.
+  `selfie-not-frontal`, `selfie-too-blurry`.
+- `onGalleryMatchFound` gains `distance`, `score` and `dupGroup`;
+  `onGalleryScanComplete` gains `dropped` and `summary`.
 
 ### 1.2.0 — 7 October 2026
 

@@ -165,6 +165,8 @@ enum SwanSessionClient {
 /// email. Signing in again replaces the saved session.
 final class SwanSessionViewController: UIViewController, UITextFieldDelegate {
     var onSignedIn: ((SwanSession) -> Void)?
+    /// The gallery page failed after a session existed. Reloads that page only.
+    var onRetryPage: (() -> Void)?
 
     /// A session that is still valid, shown first so the user taps once.
     private let existing: SwanSession?
@@ -180,6 +182,8 @@ final class SwanSessionViewController: UIViewController, UITextFieldDelegate {
     private let button = UIButton(type: .system)
     private let spinner = UIActivityIndicatorView(style: .medium)
     private var busy = false
+    /// The last Continue opened a session, and the gallery page then failed.
+    private var pageFailed = false
 
     init(existing: SwanSession?) {
         self.existing = existing
@@ -284,6 +288,40 @@ final class SwanSessionViewController: UIViewController, UITextFieldDelegate {
         if existing == nil { emailField.becomeFirstResponder() }
     }
 
+    /// Session saved. Stays on this screen with the spinner until the gallery page is
+    /// ready; the web view is created only after this, so the email field never blocks.
+    func beginOpeningGallery() {
+        pageFailed = false
+        busy = true
+        view.endEditing(true)
+        errorLabel.isHidden = true
+        continueButton.isEnabled = false
+        button.isEnabled = false
+        switchButton.isEnabled = false
+        emailField.isEnabled = false
+        nameField.isEnabled = false
+        button.configuration?.title = "Opening the gallery…"
+        continueButton.configuration?.title = "Opening the gallery…"
+        spinner.isHidden = false
+        spinner.startAnimating()
+    }
+
+    /// The page never became ready. The session is kept; Try again reloads the page.
+    func showPageError(_ message: String) {
+        busy = false
+        pageFailed = true
+        errorLabel.text = message
+        errorLabel.isHidden = false
+        spinner.stopAnimating()
+        emailField.isEnabled = true
+        nameField.isEnabled = true
+        switchButton.isEnabled = true
+        button.isEnabled = true
+        continueButton.isEnabled = true
+        if !button.isHidden { button.configuration?.title = "Try again" }
+        if !continueButton.isHidden { continueButton.configuration?.title = "Try again" }
+    }
+
     private func showSignedIn(_ session: SwanSession) {
         title_.text = "Welcome back"
         subtitle.text = "You are signed in. Continue, or sign in with another email."
@@ -294,6 +332,9 @@ final class SwanSessionViewController: UIViewController, UITextFieldDelegate {
     }
 
     @objc private func showForm() {
+        pageFailed = false
+        button.configuration?.title = "Continue"
+        continueButton.configuration?.title = "Continue"
         title_.text = "Sign in to Swan"
         subtitle.text = "Enter your details to create a Swan session."
         for v in [signedInLabel, continueButton, switchButton] { v.isHidden = true }
@@ -303,8 +344,17 @@ final class SwanSessionViewController: UIViewController, UITextFieldDelegate {
     }
 
     @objc private func continueExisting() {
+        if pageFailed {
+            retryPage()
+            return
+        }
         guard let existing = existing else { return }
         onSignedIn?(existing)
+    }
+
+    private func retryPage() {
+        beginOpeningGallery()
+        onRetryPage?()
     }
 
     func textFieldShouldReturn(_ textField: UITextField) -> Bool {
@@ -317,6 +367,10 @@ final class SwanSessionViewController: UIViewController, UITextFieldDelegate {
     }
 
     @objc private func submit() {
+        if pageFailed {
+            retryPage()
+            return
+        }
         guard !busy else { return }
         let email = (emailField.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let name = (nameField.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)

@@ -1,4 +1,4 @@
-# Gallery Pick — iOS controller notes for 1.3.0
+# Gallery Pick — iOS controller notes for 1.3.2
 
 What the native code does on the phone, what it is built from, how each part
 is licensed, and what leaves the device. Companion to `CHANGELOG.md` and
@@ -6,7 +6,7 @@ is licensed, and what leaves the device. Companion to `CHANGELOG.md` and
 
 ## Files
 
-All of them are in `photoApp/`. The Podfile names the sample target
+All of them are in `native-samples/`. The Podfile names the sample target
 `photoApp`; change that to your app's target.
 
 | File | Role |
@@ -41,7 +41,13 @@ non-commercial use only.
 Every step of finding and filtering photos is on the device:
 
 1. The library is read with the Photos framework, newest first, within the
-   months-back window.
+   months-back window. A photo that is only in iCloud is judged from the
+   thumbnail the phone keeps; if it looks like a selfie or one standing person,
+   the phone asks iCloud for a 30 KB copy to confirm one person, then for the
+   photo itself. These are Apple Photos downloads of the user's own photos, on
+   Wi-Fi or mobile data, never in Low Data Mode, up to 100 on Wi-Fi and 50 on
+   mobile data per scan. The scan waits at most 30 seconds after the local
+   pass for downloads still in progress.
 2. Faces are found with Apple Vision. Group photos, photos with other people,
    faces too small, and photos that are not head to toe or head to knee are
    dropped here.
@@ -55,7 +61,9 @@ Every step of finding and filtering photos is on the device:
 5. The page shows the ranked grid and pre-selects five.
 
 All models load from the app bundle. No model, image, face measurement or
-score is sent anywhere during steps 1 to 5.
+score is sent anywhere during steps 1 to 5. The iCloud downloads in step 1 go
+from Apple's servers to the phone through the Photos framework; Swan is not
+involved in them.
 
 ## What leaves the phone, and when
 
@@ -87,9 +95,12 @@ dropped. These exist only in memory during the scan.
 
 ## Processing cost
 
-Measured on an A15 iPhone over a library of 1,839 photos: 175 seconds, about
-11 photos a second, with the expression model adding 10 to 25 ms per matched
-photo. Each photo is released after its checks. The two models add 13 MB to
+Measured on an A16 iPhone over a library of 2,147 photos, 453 of them only in
+iCloud: 88 to 102 seconds, 21 to 24 photos a second, with the expression model
+adding 10 to 25 ms per matched photo. Peak memory for the app's own process was
+230 to 295 MB; the web view runs in its own process. An iPhone 12 over 89
+photos: 10 seconds, peak 244 MB. Each photo is released after its checks;
+iCloud downloads are held compressed, about 1 MB each, until read. The two models add 13 MB to
 the app; the MediaPipe frameworks added about 40 MB to a debug build, less
 in a release build.
 
