@@ -40,6 +40,7 @@ That's it. **56 names**: 48 across the 13 pages, plus 8 shared buttons and notes
 
       common:             { …}   // buttons & notes that appear on many pages
       entryPage:          { …}
+      genderPage:         { …}   // shown only when the host sends no gender
       heightPage:         { …}
       selfiePage:         { …}
       searchingPage:      { …}
@@ -160,6 +161,38 @@ Change once, changes everywhere.
 
 ---
 
+### `genderPage`
+
+Shown only when the host's `userDetails.gender` is missing or not `"male"` /
+`"female"`. With a usable value the screen is skipped, the same way a height
+inside the range skips the ruler. Continue stays disabled until one option is
+chosen.
+
+```
+┌───────────────────────────┐
+│ Where do you shop?     ←──┼── headingTitle
+│ It sets the body we... ←──┼── subHeadingTitle
+│ [     Womenswear     ] ←──┼── womensButton
+│ [      Menswear      ] ←──┼── mensButton
+│ [      Continue      ] ←──┼── buttonText
+│ Nothing leaves your... ←──┼── common.privacyNote
+└───────────────────────────┘
+```
+
+| Name | Current text |
+|---|---|
+| `headingTitle` | Where do you shop? |
+| `subHeadingTitle` | It sets the body we build your Muse from. |
+| `womensButton` | Womenswear |
+| `mensButton` | Menswear |
+| `buttonText` | Continue |
+
+The two option labels are content, not fixed: a brand that words its
+categories differently can change them. The value sent to the build is the
+same either way.
+
+---
+
 ### `heightPage`
 
 ```
@@ -234,6 +267,7 @@ looking at the camera — the user returns to this screen with the matching
 | `retakeNoFace` | We couldn’t see a face in that photo. Try again in better light. |
 | `retakeSeveralFaces` | Only you should be in the selfie. Try again on your own. |
 | `retakeNotFrontal` | Look straight at the camera and try again. |
+| `retakeBlurry` | That one came out blurred. Hold still and try again. |
 
 ---
 
@@ -454,6 +488,13 @@ sentence with your own. See §4.
         "subHeadingTitle": "Take a selfie & pick a few photos. We measure you & build your twin. Then see anything, in your size, on you.",
         "buttonText": "Start",
         "footerText": "About a minute. Nothing leaves your phone until you approve it."
+      },
+      "genderPage": {
+        "headingTitle": "Where do you shop?",
+        "subHeadingTitle": "It sets the body we build your Muse from.",
+        "womensButton": "Womenswear",
+        "mensButton": "Menswear",
+        "buttonText": "Continue"
       },
       "heightPage": {
         "headingTitle": "How tall are you?",
