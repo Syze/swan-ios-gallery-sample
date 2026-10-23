@@ -452,7 +452,7 @@ returned to your app — the flow handles it and keeps going.
 | Some photos would not upload | "Paused." | *Try again* | Re-attempts **only** the failed photos. `onRetry` with `escalated: false`. |
 | The same photos failed twice | "Paused." | *Try again* | Back to the picker. `onRetry` with `escalated: true`. |
 | The build failed or was refused | "We couldn't finish." plus **the service's own message** | *Retry* | Back to the picker. `onRetry` with `escalated: true`. |
-| A capture-fallback run failed | as above | *Retry* | Back to the three-shot camera, old shots cleared. |
+| A capture-fallback run failed | as above | *Retry* | Back to the five-shot camera, old shots cleared. |
 | One photo is held by a build that has not finished | **No failure screen.** The user stays on the picker, that one tile is marked, and a message explains it | — | Register can answer `409 PHOTO_IN_USE` naming a single photo. The set is fine and the picker is full of alternatives, so that photo is dropped and the run continues. Rare — it needs an earlier build still in progress. The reference selfie is the exception: it is not a tile, so it takes the ordinary failure path. |
 
 `escalated` is the field that matters: `false` means the same photos are being
@@ -667,8 +667,9 @@ streams, keeping none of it, before the match reaches the grid:
 - **On the phone:** counted from the local file. Over 10MB is hidden.
 - **Only in iCloud:** downloaded just far enough to size it, with a 10s limit.
   That is the matched photos only, never the library.
-- **Low Data Mode on** (`NWPath.isConstrained`): nothing is downloaded, and the
-  photo is hidden.
+- **Low Data Mode on** (`NWPath.isConstrained`): sized the same way; the
+  `sizeOriginalsInLowDataMode` switch in the controller turns that off, which
+  hides the photo instead.
 - **Unreadable, or not downloaded in time:** hidden. With no fallback it could
   not be uploaded.
 
@@ -905,7 +906,7 @@ The groups, in the order the user meets them:
 | `selfiePage` | The reference selfie |
 | `searchingPage` | Shown while your app scans |
 | `pickerPage` | The photo grid |
-| `capturePage` | The three-shot camera fallback |
+| `capturePage` | The five-shot camera fallback |
 | `topUpPage` | The single "Take it now" shot |
 | `buildingPage` | Shown while the Muse builds |
 | `previewPage` | The finished carousel |
@@ -1013,16 +1014,19 @@ bundled CoreML face-identity model is the fix, and is not yet included.
 
 **iCloud-only photos.** The scan does not download the library. For a photo whose
 full version is only in iCloud, the phone keeps a 120px thumbnail; when that
-thumbnail shows one face filling the frame, a ~1,000px copy is downloaded over
-Wi-Fi (at most 40 per scan, 10s each, about a minute in all, never in Low Data
-Mode) and scanned like any other photo. Every other iCloud-only photo is skipped,
-because a 120px thumbnail cannot say whose body a full-length photo shows. All of
-it is counted and logged.
+thumbnail shows one face filling the frame, or one person standing tall in the
+frame, the photo is a candidate. A 30KB copy is fetched first to confirm one
+person; then the photo itself, 1536px for a selfie or 2560px for a standing
+shot, and it is scanned like any other photo. Downloads run during the local
+pass, six at a time, up to 200 per scan on Wi-Fi or 100 on mobile data, Low
+Data Mode included; the scan waits 30s after the local pass for the rest, and up
+to 90s while a photo the small copy confirmed is still coming down. Every other
+iCloud-only photo is skipped. All of it is counted and logged.
 
 **Limited photo access.** If the user shares only selected photos, only those are
 scanned. A small result count is expected, not a fault.
 
-**Camera fallback photos stay in the page.** The three photos from the *no
+**Camera fallback photos stay in the page.** The five photos from the *no
 matches* fallback are never sent to the host, and `onCaptureComplete` carries
 generated ids only. This is **not** true of "Take it now" photos, which do cross
 to the host via `GALLERY_CAPTURE_PHOTO` — in memory, never to the library.
@@ -1055,7 +1059,29 @@ Every release has its own address, for example
   reference host logs it.
 - **Each release says whether `ViewController.swift` needs updating.**
 
-### 1.3.2 — unreleased
+### 1.3.3 — unreleased
+
+**Controller:** update recommended. The 1.3.2 `ViewController.swift` still
+works; without the update, photos saved from other apps or taken with Live
+Photos off are not scanned, and the wider iCloud pass does not apply. The full
+list is in `CHANGELOG.md`.
+
+**Flow**
+
+- Every photo in the window is scanned except real screenshots. The 1.3.2
+  controller dropped every photo without a Live, HDR or depth flag.
+- iCloud: up to 200 photos on Wi-Fi, 100 on mobile data, Low Data Mode
+  included; the wait after the local pass runs to 90 seconds while confirmed
+  photos are still coming down; each download gets 20 seconds.
+- No match: the camera takes five photos (two front, two side, one selfie), the
+  same set as the picker, instead of three. The text depends on photo access.
+
+**Setup**
+
+- `summary` gains `cloudWaitMs`. New text keys `capturePage.limitedHeadingTitle`
+  and `capturePage.limitedSubHeadingTitle`.
+
+### 1.3.2 — 22 October 2026
 
 **Controller:** update recommended. The 1.3.0 and 1.3.1 `ViewController.swift`
 still work; without the update, photos that are only in iCloud are not searched

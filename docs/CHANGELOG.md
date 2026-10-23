@@ -20,7 +20,66 @@ onwards; those entries are kept for reference and need nothing on your side.
 
 ---
 
-## [1.3.2] — released
+## [1.3.3] — unreleased
+
+**Mobile iOS only.** The npm package is unchanged. **Controller: update
+recommended.** The 1.3.2 controller keeps working with this page; without the
+update, the fix and the controller changes below do not apply.
+
+```
+https://swan-mobile-web-component.swan.so/v1.3.3/index.html
+```
+
+### Controller
+
+- **Fixed: photos without a Live, HDR or depth flag were never scanned.** The
+  screenshot filter asked Photos for "images whose screenshot bit is not set",
+  and Photos answered with "images that have no subtype bits at all". Every
+  photo saved from another app (Slack, WhatsApp, Files), AirDropped, or taken
+  with Live Photos off was dropped before the scan began and counted in the
+  log as a skipped screenshot. On one test library that was 24 of 113 photos;
+  on another, 2,746 of 14,989. Screenshots are now filtered in code from each
+  photo's own flag; nothing else is skipped. The log's "screenshots skipped"
+  count is now real screenshots only. A first scan after the update covers
+  more photos and takes longer.
+- **iCloud photos: more of them, and a longer wait when they are all there is.**
+  Up to 200 on Wi-Fi and 100 on mobile data, Low Data Mode included (1.3.2:
+  100, 50, none). The scan still waits 30 seconds after the local pass, and
+  longer, up to 90 seconds, only while a photo the small copy confirmed is
+  still coming down; a library that is all in iCloud has nothing to match
+  until those arrive. Each download gets 20 seconds instead of 10: on one
+  Wi-Fi library full-length downloads took 7 to 9.7 seconds and six were cut
+  off at 10. Originals are sized for upload in Low Data Mode too. `summary`
+  gains `cloudWaitMs`, how long the scan waited after the local pass.
+- **`memoryPeakMB`** is now reported by the shipped controller. It was listed
+  under 1.3.2 but missing from that file.
+
+### Changed
+
+- **No match: five photos instead of three.** When the search finds nothing,
+  the camera now takes two front, two side and one selfie — the same set the
+  picker asks for — in that order, each uploaded as its type. The row above the
+  camera lists the types in the picker's order and counts them ("Selfie ·
+  Front 1/2 · Side 0/2"), and the second front and side say "One more from the
+  front" / "side".
+- **No-match text by photo access.** Full access: "We need a few more
+  photos." / "We couldn't find enough clear, full-length photos of you. Take
+  the rest now." Limited access: "These don't match your selfie." / "Choose
+  different photos of you, or take new ones now." — new keys
+  `capturePage.limitedHeadingTitle` and `limitedSubHeadingTitle`. The camera
+  button (`capturePage.buttonText`) is "Take new photos", on the no-match
+  screen and on Take it now. `capture_fallback_shown` gains `limited`.
+  **If your `ViewController.swift` sends its own `capturePage` text** — the
+  earlier sample did, asking for three photos "taken automatically after a
+  countdown" — remove that block: it overrides the new text and no longer
+  describes the screen. The current sample sends none.
+- **The photo screens no longer promise a countdown.** The default
+  `capturePage` and `topUpPage` subtitles drop "takes itself after a
+  countdown": on the rear camera the photo is taken at once.
+
+---
+
+## [1.3.2] — 2026-10-22
 
 **Mobile iOS only.** The npm package is unchanged. **Controller: update
 recommended.** The 1.3.0 and 1.3.1 controllers keep working with this page;

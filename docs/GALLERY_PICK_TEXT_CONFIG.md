@@ -46,7 +46,7 @@ That's it. **77 names**: 69 across the 14 pages, plus 8 shared buttons and notes
       selfiePage:         { …}
       searchingPage:      { …}
       pickerPage:         { …}   // the main photo-picking screen
-      capturePage:        { …}   // "take 3 photos" fallback
+      capturePage:        { …}   // "take 5 photos" fallback
       topUpPage:          { …}   // take 1 photo for a missing angle
       buildingPage:       { …}
       previewPage:        { …}
@@ -354,16 +354,22 @@ is what the three `scanning*` names above are for.
 
 ---
 
-### `capturePage` — "take 3 photos" fallback
+### `capturePage` — "take 5 photos" fallback
 
 Shown when the photo search found nothing usable.
 
 | Name | Current text |
 |---|---|
-| `headingTitle` | Three quick photos. |
-| `subHeadingTitle` | Two full-length shots — front and side — and one selfie. Prop your phone up and stand back so we can see your feet. Each photo takes itself after a countdown. |
-| `buttonText` | I'm ready |
+| `headingTitle` | We need a few more photos. |
+| `subHeadingTitle` | We couldn't find enough clear, full-length photos of you. Take the rest now. |
+| `buttonText` | Take new photos |
 | `countingButtonText` | Get into position… |
+| `limitedHeadingTitle` | These don't match your selfie. |
+| `limitedSubHeadingTitle` | Choose different photos of you, or take new ones now. |
+
+The two `limited*` names are shown instead of the heading and subheading when the
+user gave the app limited photo access. `buttonText` is also the button on the
+**Take it now** screen.
 
 ---
 
@@ -373,7 +379,7 @@ Reached from the picker's **Take it now** button.
 
 | Name | Current text |
 |---|---|
-| `subHeadingTitle` | Prop your phone up and stand back so we can see your feet. It takes itself after a countdown. |
+| `subHeadingTitle` | Prop your phone up and stand back so we can see your feet. |
 | `subHeadingTitleSelfie` | Hold the phone up and look at the camera. |
 
 **One extra name, with no fixed default:**
@@ -577,13 +583,15 @@ sentence with your own. See §4.
         "picksTitle": "Picked for you"
       },
       "capturePage": {
-        "headingTitle": "Three quick photos.",
-        "subHeadingTitle": "Two full-length shots — front and side — and one selfie. Prop your phone up and stand back so we can see your feet. Each photo takes itself after a countdown.",
-        "buttonText": "I'm ready",
-        "countingButtonText": "Get into position…"
+        "headingTitle": "We need a few more photos.",
+        "subHeadingTitle": "We couldn't find enough clear, full-length photos of you. Take the rest now.",
+        "buttonText": "Take new photos",
+        "countingButtonText": "Get into position…",
+        "limitedHeadingTitle": "These don't match your selfie.",
+        "limitedSubHeadingTitle": "Choose different photos of you, or take new ones now."
       },
       "topUpPage": {
-        "subHeadingTitle": "Prop your phone up and stand back so we can see your feet. It takes itself after a countdown.",
+        "subHeadingTitle": "Prop your phone up and stand back so we can see your feet.",
         "subHeadingTitleSelfie": "Hold the phone up and look at the camera."
       },
       "buildingPage": {

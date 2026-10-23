@@ -1,6 +1,6 @@
 
 
-// Swan Gallery Pick host — pairs with Swan mobile 1.3.2. Release notes and
+// Swan Gallery Pick host — pairs with Swan mobile 1.3.3. Release notes and
 // whether this file needs updating: CHANGELOG.md.
 
 import UIKit
@@ -15,7 +15,7 @@ final class ViewController: UIViewController {
 
     /// Where the SDK bundle is served from. Must be **https** — getUserMedia needs
     /// a secure context, so an http or file:// URL gives no camera.
-    let sdkURL = URL(string: "https://swan-mobile-web-component.swan.so/v1.3.2/index.html")!
+    let sdkURL = URL(string: "https://swan-mobile-web-component.swan.so/v1.3.3/index.html")!
 
     static let bridgeName = "swanBridge"
 
@@ -78,12 +78,6 @@ final class ViewController: UIViewController {
                 ],
                 "genderPage": [
                     "subHeadingTitle": "",
-                ],
-                "capturePage": [
-                    "headingTitle": "These don't match your selfie.",
-                    "subHeadingTitle": "We couldn't find any photos in your gallery. Please take three new ones: a full-body front view, a full-body side view (both head to toe), and a clear selfie. Each photo is taken automatically after a countdown.",
-                    "buttonText": "I'm ready",
-                    "countingButtonText": "Get into position…",
                 ],
                 "common": [
                     // Footer on the searching screen, and again while the grid is still filling.
@@ -167,6 +161,20 @@ final class ViewController: UIViewController {
     /// The last `matchPerson` decided "no match" from the face alone, before body
     /// pose — see `matchBeforePose`. Counted by the scan.
     var lastEarlyNoMatch = false
+
+    /// This process's resident memory in MB, for the scan summary. The web view's
+    /// content process is separate and not counted here; Xcode's memory gauge
+    /// shows both.
+    static func residentMB() -> Int {
+        var info = mach_task_basic_info()
+        var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size) / 4
+        let result = withUnsafeMutablePointer(to: &info) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                task_info(mach_task_self_, task_flavor_t(MACH_TASK_BASIC_INFO), $0, &count)
+            }
+        }
+        return result == KERN_SUCCESS ? Int(info.resident_size / 1_048_576) : 0
+    }
     var lastBodyRetry: (note: String, rescued: Bool)?
 
     /// How many faces in the last photo examined were the shopper's. Above 1 it was
@@ -193,15 +201,21 @@ final class ViewController: UIViewController {
     static let cloudPixels: CGFloat = loadPixels
     /// Downloads per scan, newest first; one cap on Wi-Fi, a lower one on mobile data.
     /// The mobile cap is a placeholder until a scan on mobile data has been measured.
-    static let cloudDownloadCapWifi = 100
-    static let cloudDownloadCapMobile = 50
+    static let cloudDownloadCapWifi = 200
+    static let cloudDownloadCapMobile = 100
     /// Download slots held for full-length candidates, so recent selfies cannot crowd them out.
     static let cloudFullLengthReserve = 20
     /// Downloads start during the local pass; the scan waits at most `cloudTail` after
     /// the local pass for the rest, which are counted as left.
     static let cloudTail: TimeInterval = 30
-    /// Per-photo limit, as for sizing an original.
-    static let cloudTimeout: DispatchTimeInterval = .seconds(10)
+    /// Past `cloudTail`, the wait goes on only while a photo the small copy
+    /// confirmed is still downloading in full, and never past this. A library
+    /// that is all in iCloud has nothing to match until those arrive.
+    static let cloudTailMax: TimeInterval = 90
+    /// Per-photo limit. Full-length downloads on Wi-Fi measured 7 to 9.7 s on one
+    /// library and six photos timed out at 10 s; the wait after the local pass
+    /// (`cloudTail`/`cloudTailMax`) bounds the scan, so this can be generous.
+    static let cloudTimeout: DispatchTimeInterval = .seconds(20)
     /// Downloads in flight at once.
     static let cloudParallel = 6
     /// A small copy fetched first, about 30KB: faces and people are counted on it
@@ -216,11 +230,11 @@ final class ViewController: UIViewController {
     /// Measured on 120px thumbnails: 124 of 134 full-length photos pass, 2 of 22 others.
     static let cloudPersonHeight: CGFloat = 0.6
 
-    /// Online and not a connection the user asked the phone to go easy on (Low Data Mode).
-    /// Mobile data is allowed, under `cloudDownloadCapMobile`.
+    /// Online. Mobile data is allowed under `cloudDownloadCapMobile`; Low Data Mode
+    /// does not stop the pass, the caps bound what it costs.
     static var cloudDownloadsAllowed: Bool {
         let path = pathMonitor.currentPath
-        return path.status == .satisfied && !path.isConstrained
+        return path.status == .satisfied
     }
     static var cloudOnMobile: Bool { pathMonitor.currentPath.isExpensive }
     static var cloudDownloadCap: Int { cloudOnMobile ? cloudDownloadCapMobile : cloudDownloadCapWifi }
@@ -1224,6 +1238,10 @@ extension ViewController {
     /// The shopper has asked the phone to save data — Low Data Mode on mobile data
     /// or on this Wi-Fi network. The scan then downloads nothing to size a photo.
     static var lowDataMode: Bool { pathMonitor.currentPath.isConstrained }
+    /// Whether a matched photo's original is still sized over the network in Low
+    /// Data Mode. On, like the iCloud pass: a match the scan paid to fetch should
+    /// not vanish at the upload check. Off hides such photos as "low data".
+    static let sizeOriginalsInLowDataMode = true
 
     /// What sizing a matched photo's original found.
     enum OriginalCheck {
@@ -1241,7 +1259,7 @@ extension ViewController {
         case .success(let bytes): return .fits(bytes: bytes, downloaded: false)
         case .failure(.tooLarge): return .tooLarge(downloaded: false)
         case .failure:
-            guard !Self.lowDataMode else { return .lowData }
+            guard Self.sizeOriginalsInLowDataMode || !Self.lowDataMode else { return .lowData }
             switch Original.size(for: asset, allowNetwork: true) {
             case .success(let bytes): return .fits(bytes: bytes, downloaded: true)
             case .failure(.tooLarge): return .tooLarge(downloaded: true)
@@ -1279,24 +1297,26 @@ extension ViewController {
         }
         options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
 
-        // The shopper's own library only, not shared albums, and no screenshots:
-        // a screenshot of a model passes every other check.
+        // The shopper's own library only — not shared albums, which are other
+        // people's photos — and no screenshots: a screenshot of a model passes every
+        // other check. Screenshots are filtered in code, not in the fetch predicate:
+        // PhotoKit evaluates "(mediaSubtypes & screenshot) == 0" as "no subtype bits
+        // at all", which dropped every photo without a Live/HDR/depth flag — photos
+        // saved from other apps, AirDropped, or taken with Live Photos off. Measured on
+        // one library: 24 of 113 photos removed, all with subtypes 0, none a screenshot.
         options.includeAssetSourceTypes = [.typeUserLibrary]
-        let withScreenshots = PHAsset.fetchAssets(with: .image, options: options).count
-        let noScreenshots = NSPredicate(format: "(mediaSubtypes & %d) == 0",
-                                        PHAssetMediaSubtype.photoScreenshot.rawValue)
-        options.predicate = options.predicate.map {
-            NSCompoundPredicate(andPredicateWithSubpredicates: [$0, noScreenshots])
-        } ?? noScreenshots
-
-        let assets = PHAsset.fetchAssets(with: .image, options: options)
+        var assets: [PHAsset] = []
+        var screenshots = 0
+        PHAsset.fetchAssets(with: .image, options: options).enumerateObjects { asset, _, _ in
+            if asset.mediaSubtypes.contains(.photoScreenshot) { screenshots += 1 } else { assets.append(asset) }
+        }
         let total = assets.count
 
         // Visible-to-us count with no date filter. If this is 0 the problem is
         // access; if it is large while `total` is 0 the problem is the date range.
         let visible = PHAsset.fetchAssets(with: .image, options: nil).count
         let window = isLimitedAccess ? "everything you shared" : "the last \(months) months"
-        print("\u{1f4f8} \(total) photos in \(window) (\(visible) visible in total\(isLimitedAccess ? ", limited access" : ""), \(withScreenshots - total) screenshots skipped)")
+        print("\u{1f4f8} \(total) photos in \(window) (\(visible) visible in total\(isLimitedAccess ? ", limited access" : ""), \(screenshots) screenshots skipped)")
         logSensitivityPolicy()
 
         guard total > 0 else {
@@ -1365,6 +1385,10 @@ extension ViewController {
             var cloudCandidates: [(asset: PHAsset, n: Int)] = []
             // Downloads started during the local pass. Each job's result lands in its box
             // on the download queue; the scan reads them after the local pass, in order.
+            final class CloudGauge { private let lock = NSLock(); private var n = 0
+                func add(_ d: Int) { lock.lock(); n += d; lock.unlock() }
+                var value: Int { lock.lock(); defer { lock.unlock() }; return n } }
+            let cloudFullInFlight = CloudGauge()
             final class CloudJob { let asset: PHAsset; let n: Int; let kind: String; let group = DispatchGroup(); let box = LoadBox(); var seconds = 0.0; var previewRejected = false; var previewNote = ""; var data: Data?
                 init(asset: PHAsset, n: Int, kind: String) { self.asset = asset; self.n = n; self.kind = kind } }
             var cloudJobs: [CloudJob] = []
@@ -1400,6 +1424,8 @@ extension ViewController {
             // No-matches decided before body pose — see `matchBeforePose`.
             var earlyNoMatch = 0
             self?.stageMs = [:]
+            let memoryAtStart = Self.residentMB()
+            var memoryPeak = memoryAtStart
             FaceRecognizer.timing = { stage, ms in self?.stageMs[stage, default: 0] += ms }
             func examine(_ asset: PHAsset, _ image: UIImage, n: Int) {
                     // Read before anything else loads: the photo is already upright.
@@ -1598,7 +1624,7 @@ extension ViewController {
                 }
 
                 autoreleasepool {
-                    let asset = assets.object(at: index)
+                    let asset = assets[index]
                     let n = index + 1
 
                     examined += 1
@@ -1622,7 +1648,7 @@ extension ViewController {
                     } ?? nil
                     ahead = nil
                     if Self.decodeAhead, index + 1 < total {
-                        let nextAsset = assets.object(at: index + 1)
+                        let nextAsset = assets[index + 1]
                         if Self.shapeReject(nextAsset) == nil {
                             let group = DispatchGroup(), box = LoadBox()
                             group.enter()
@@ -1655,12 +1681,14 @@ extension ViewController {
                                     let preview = self?.loadFromCloudResult(asset: asset, pixels: Self.cloudPreviewPixels, timeout: Self.cloudTimeout)
                                     let check: (passes: Bool, note: String)? = preview?.image.map { self?.cloudPreviewPasses($0, kind: kind) ?? (passes: false, note: "") }
                                     if let check, check.passes {
+                                        cloudFullInFlight.add(1)
                                         var full = self?.loadFromCloudResult(asset: asset, pixels: kind == "selfie" ? Self.cloudPixels : Self.cloudFullLengthPixels, timeout: Self.cloudTimeout)
                                         // Held as JPEG until the scan reads it: a decoded 2560px image is
                                         // about 26MB, and dozens may wait for the local pass to end.
                                         job.data = full?.image?.jpegData(compressionQuality: 0.92)
                                         full?.image = nil
                                         job.box.result = full
+                                        cloudFullInFlight.add(-1)
                                     } else if let check {
                                         job.previewRejected = true
                                         job.previewNote = check.note
@@ -1685,6 +1713,7 @@ extension ViewController {
                         return
                     }
                     examine(asset, image, n: n)
+                    if n % 25 == 0 { memoryPeak = max(memoryPeak, Self.residentMB()) }
 
                     // Throttled by time, not photo count: per-photo cost varies too
                     // much for "every Nth" to give a predictable update rate.
@@ -1700,22 +1729,41 @@ extension ViewController {
 
             // ---- iCloud pass -------------------------------------------------
             // The downloads started during the local pass, examined like any other photo in
-            // queue order. Waits at most `cloudTail`; the rest count as left.
+            // `cloudTail` past the local pass, longer (to `cloudTailMax`) only while
+            // a confirmed photo is still downloading; the rest count as left.
             var cloudDownloaded = 0
             var cloudFailed = 0
             var cloudSeconds = 0.0
             let cloudPassStarted = Date()
             if !cloudCandidates.isEmpty && !cloudAllowed {
-                print("☁️  \(cloudCandidates.count) iCloud candidate(s) not downloaded — offline, or Low Data Mode is on")
+                print("☁️  \(cloudCandidates.count) iCloud candidate(s) not downloaded — offline")
             }
             let deadline = cloudPassStarted.addingTimeInterval(Self.cloudTail)
+            let hardDeadline = cloudPassStarted.addingTimeInterval(Self.cloudTailMax)
+            var cloudExtended = false
             for job in cloudJobs {
                 guard self?.scanGeneration == generation else {
                     print("\u{1f6d1} Scan superseded — stopping in the iCloud pass")
                     return
                 }
                 let wait = max(0, deadline.timeIntervalSinceNow)
-                guard job.group.wait(timeout: .now() + wait) == .success else {
+                var arrived = job.group.wait(timeout: .now() + wait) == .success
+                // Past the base wait: keep going in short steps while a confirmed
+                // photo is still coming down, up to `cloudTailMax`. Each step pings
+                // the page so its stall timer stays quiet.
+                while !arrived, hardDeadline.timeIntervalSinceNow > 0, cloudFullInFlight.value > 0 {
+                    if !cloudExtended {
+                        cloudExtended = true
+                        print("☁️  \(Int(Self.cloudTail))s up — \(cloudFullInFlight.value) confirmed photo(s) still downloading, waiting up to \(Int(Self.cloudTailMax))s")
+                    }
+                    DispatchQueue.main.async {
+                        self?.sendToWeb(["type": "onGalleryScanProgress",
+                                         "payload": ["done": total, "total": total]])
+                    }
+                    let step = min(2, max(0, hardDeadline.timeIntervalSinceNow))
+                    arrived = job.group.wait(timeout: .now() + step) == .success
+                }
+                guard arrived else {
                     cloudLeft += 1
                     noImage += 1
                     eval.note(job.asset, image: nil, gate: .noImage)
@@ -1741,6 +1789,7 @@ extension ViewController {
                     cloudDownloaded += 1
                     if Self.verboseLogging, let cg = image.cgImage { print("  ☁️  [\(job.n)] \(job.kind) downloaded \(cg.width)x\(cg.height) in \(String(format: "%.1f", job.seconds))s") }
                     examine(job.asset, image, n: job.n)
+                    memoryPeak = max(memoryPeak, Self.residentMB())
                     // Keeps the page's stall timer quiet while this pass runs.
                     DispatchQueue.main.async {
                         self?.sendToWeb(["type": "onGalleryScanProgress",
@@ -1749,6 +1798,7 @@ extension ViewController {
                 }
             }
 
+            let cloudWaited = Date().timeIntervalSince(cloudPassStarted)
             let elapsed = Date().timeIntervalSince(startedAt)
             let rate = Double(examined) / max(elapsed, 0.001)
 
@@ -1803,7 +1853,7 @@ extension ViewController {
                 no image    \(noImage)   (in iCloud with no usable copy on the phone, or unreadable)
                 skipped     \(skippedShape)   (from the library record alone: too small to scan, or a panorama)
                 local copy  \(localCopies)   (in iCloud, scanned from the phone's smaller copy)
-                iCloud      \(cloudOnly) only in iCloud; \(cloudSelfieCandidates) looked like selfies, \(cloudFullCandidates) like a full-length photo; \(cloudDownloaded) downloaded (\(String(format: "%.1f", cloudSeconds))s of download time), \(cloudPreviewOut) dropped on the small copy, \(cloudFailed) failed, \(cloudLeft) left (cap \(cloudCap)\(Self.cloudOnMobile ? " on mobile data" : " on Wi-Fi"), wait \(Int(Self.cloudTail))s after the local pass\(cloudAllowed ? "" : " — no suitable connection"))
+                iCloud      \(cloudOnly) only in iCloud; \(cloudSelfieCandidates) looked like selfies, \(cloudFullCandidates) like a full-length photo; \(cloudDownloaded) downloaded (\(String(format: "%.1f", cloudSeconds))s of download time), \(cloudPreviewOut) dropped on the small copy, \(cloudFailed) failed, \(cloudLeft) left (cap \(cloudCap)\(Self.cloudOnMobile ? " on mobile data" : " on Wi-Fi"), waited \(Int(cloudWaited))s after the local pass\(cloudExtended ? " (extended past \(Int(Self.cloudTail))s for confirmed photos)" : "")\(cloudAllowed ? "" : " — no suitable connection"))
                 no face     \(noFace)
                 group       \(groupSkipped)   (skipped: more than one face; \(sameShopper) more had several faces all the shopper's and went on)
                 others      \(otherPeople)   (skipped: someone else in the photo)
@@ -1821,6 +1871,7 @@ extension ViewController {
                 duplicates  \(duplicates)   (matches that repeat an earlier one; shown, but only one of each is pre-selected)
                 MATCHED     \(matchedIds.count)   (selfie \(found[.selfie, default: 0]), front \(found[.front, default: 0]), side \(found[.side, default: 0]); \(kneeLength) in on the knee rule)
                 elapsed     \(String(format: "%.1f", elapsed))s  (\(String(format: "%.0f", rate))/s)
+                memory      \(memoryAtStart)MB at start, peak \(max(memoryPeak, Self.residentMB()))MB during the scan (this process; the web view's process is separate)
                 stages      \((self?.stageMs ?? [:]).sorted { $0.key < $1.key }.map { "\($0.key) \(String(format: "%.1f", $0.value / 1000))s" }.joined(separator: " · "))
                 ==============================
 
@@ -1876,6 +1927,7 @@ extension ViewController {
                 summary["blendSpread"] = self?.lastReferenceSpread
                 summary["blendShift"] = self?.lastReferenceShift
                 summary["elapsedMs"] = Int(elapsed * 1000)
+                summary["memoryPeakMB"] = max(memoryPeak, Self.residentMB())
                 summary["photosPerSecond"] = Int(rate)
                 summary["inCloud"] = cloudOnly
                 summary["cloudSelfies"] = cloudSelfieCandidates
@@ -1886,6 +1938,7 @@ extension ViewController {
                 summary["cloudDownloaded"] = cloudDownloaded
                 summary["cloudFailed"] = cloudFailed
                 summary["cloudLeft"] = cloudLeft
+                summary["cloudWaitMs"] = Int(cloudWaited * 1000)
 
                 // The held-back matches, streamed now that the cut is known, so the
                 // page learns their type and distance for pre-selection.

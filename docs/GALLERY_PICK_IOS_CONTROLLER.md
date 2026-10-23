@@ -1,4 +1,4 @@
-# Gallery Pick — iOS controller notes for 1.3.2
+# Gallery Pick — iOS controller notes for 1.3.3
 
 What the native code does on the phone, what it is built from, how each part
 is licensed, and what leaves the device. Companion to `CHANGELOG.md` and
@@ -45,9 +45,11 @@ Every step of finding and filtering photos is on the device:
    thumbnail the phone keeps; if it looks like a selfie or one standing person,
    the phone asks iCloud for a 30 KB copy to confirm one person, then for the
    photo itself. These are Apple Photos downloads of the user's own photos, on
-   Wi-Fi or mobile data, never in Low Data Mode, up to 100 on Wi-Fi and 50 on
-   mobile data per scan. The scan waits at most 30 seconds after the local
-   pass for downloads still in progress.
+   Wi-Fi or mobile data, Low Data Mode included, up to 200 on Wi-Fi and 100 on
+   mobile data per scan. The scan waits 30 seconds after the local pass for
+   downloads still in progress, and up to 90 seconds while a photo the small
+   copy confirmed is still coming down (a library that is all in iCloud has
+   nothing to match until then). Both are constants in the controller.
 2. Faces are found with Apple Vision. Group photos, photos with other people,
    faces too small, and photos that are not head to toe or head to knee are
    dropped here.
