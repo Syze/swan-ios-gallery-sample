@@ -1,6 +1,6 @@
 
 
-// Swan Gallery Pick host — pairs with Swan mobile 1.3.3. Release notes and
+// Swan Gallery Pick host — pairs with Swan mobile 1.3.4. Release notes and
 // whether this file needs updating: CHANGELOG.md.
 
 import UIKit
@@ -15,7 +15,7 @@ final class ViewController: UIViewController {
 
     /// Where the SDK bundle is served from. Must be **https** — getUserMedia needs
     /// a secure context, so an http or file:// URL gives no camera.
-    let sdkURL = URL(string: "https://swan-mobile-web-component.swan.so/v1.3.3/index.html")!
+    let sdkURL = URL(string: "https://swan-mobile-web-component.swan.so/v1.3.4/index.html")!
 
     static let bridgeName = "swanBridge"
 
@@ -161,6 +161,16 @@ final class ViewController: UIViewController {
     /// The last `matchPerson` decided "no match" from the face alone, before body
     /// pose — see `matchBeforePose`. Counted by the scan.
     var lastEarlyNoMatch = false
+
+    /// A photo's capture date as `yyyy-MM-dd`, in the phone's time zone, for the
+    /// scan summary. Nil when the photo has no date.
+    static func captureDay(_ date: Date?) -> String? {
+        guard let date else { return nil }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.string(from: date)
+    }
 
     /// This process's resident memory in MB, for the scan summary. The web view's
     /// content process is separate and not counted here; Xcode's memory gauge
@@ -1732,6 +1742,10 @@ extension ViewController {
             // `cloudTail` past the local pass, longer (to `cloudTailMax`) only while
             // a confirmed photo is still downloading; the rest count as left.
             var cloudDownloaded = 0
+            // The first and last iCloud download: the photo's capture date, and when
+            // it landed, in ms from the start of the scan. For the scan summary.
+            var cloudFirstDownloaded: (day: String?, atMs: Int)?
+            var cloudLastDownloaded: (day: String?, atMs: Int)?
             var cloudFailed = 0
             var cloudSeconds = 0.0
             let cloudPassStarted = Date()
@@ -1787,6 +1801,9 @@ extension ViewController {
                         return
                     }
                     cloudDownloaded += 1
+                    let landed = (day: Self.captureDay(job.asset.creationDate), atMs: Int(Date().timeIntervalSince(startedAt) * 1000))
+                    if cloudFirstDownloaded == nil { cloudFirstDownloaded = landed }
+                    cloudLastDownloaded = landed
                     if Self.verboseLogging, let cg = image.cgImage { print("  ☁️  [\(job.n)] \(job.kind) downloaded \(cg.width)x\(cg.height) in \(String(format: "%.1f", job.seconds))s") }
                     examine(job.asset, image, n: job.n)
                     memoryPeak = max(memoryPeak, Self.residentMB())
@@ -1835,6 +1852,15 @@ extension ViewController {
             // appended after it, so tiles only ever appear.
             let heldSet = Set(heldIds)
             let ordered = matchedIds.filter { !heldSet.contains($0) } + matchedIds.filter { heldSet.contains($0) }
+
+            // Capture dates of the final matches, for the scan summary. The scan runs
+            // newest first, so "first" is the newest match and "last" the oldest.
+            var matchedDates: [Date] = []
+            PHAsset.fetchAssets(withLocalIdentifiers: matchedIds, options: nil).enumerateObjects { asset, _, _ in
+                if let date = asset.creationDate { matchedDates.append(date) }
+            }
+            let matchedFirstDate = Self.captureDay(matchedDates.max())
+            let matchedLastDate = Self.captureDay(matchedDates.min())
 
             // Built here, off the main thread. The grid is passed in the order the
             // web will show it, because that order is what "the top" means.
@@ -1939,6 +1965,12 @@ extension ViewController {
                 summary["cloudFailed"] = cloudFailed
                 summary["cloudLeft"] = cloudLeft
                 summary["cloudWaitMs"] = Int(cloudWaited * 1000)
+                summary["cloudFirstDownloadedDate"] = cloudFirstDownloaded?.day
+                summary["cloudFirstDownloadedAtMs"] = cloudFirstDownloaded?.atMs
+                summary["cloudLastDownloadedDate"] = cloudLastDownloaded?.day
+                summary["cloudLastDownloadedAtMs"] = cloudLastDownloaded?.atMs
+                summary["matchedFirstDate"] = matchedFirstDate
+                summary["matchedLastDate"] = matchedLastDate
 
                 // The held-back matches, streamed now that the cut is known, so the
                 // page learns their type and distance for pre-selection.

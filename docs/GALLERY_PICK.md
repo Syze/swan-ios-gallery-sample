@@ -1059,7 +1059,20 @@ Every release has its own address, for example
   reference host logs it.
 - **Each release says whether `ViewController.swift` needs updating.**
 
-### 1.3.3 — unreleased
+### 1.3.4 — 26 October 2026
+
+**Controller:** update recommended for the new fields; older controllers keep
+working without them.
+
+**Setup**
+
+- `summary`, and `scan_complete` as separate properties, gain
+  `cloudFirstDownloadedDate`, `cloudLastDownloadedDate` (capture dates,
+  `yyyy-MM-dd`), `cloudFirstDownloadedAtMs`, `cloudLastDownloadedAtMs` (ms from
+  the start of the scan), and `matchedFirstDate`, `matchedLastDate` (newest and
+  oldest match).
+
+### 1.3.3 — 23 October 2026
 
 **Controller:** update recommended. The 1.3.2 `ViewController.swift` still
 works; without the update, photos saved from other apps or taken with Live

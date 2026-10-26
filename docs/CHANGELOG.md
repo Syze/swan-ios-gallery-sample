@@ -20,7 +20,34 @@ onwards; those entries are kept for reference and need nothing on your side.
 
 ---
 
-## [1.3.3] — unreleased
+## [1.3.4] — 2026-10-26
+
+**Mobile iOS only.** The npm package is unchanged. **Controller: update
+recommended** for the new fields; older controllers keep working and simply do
+not send them.
+
+```
+https://swan-mobile-web-component.swan.so/v1.3.4/index.html
+```
+
+### Added
+
+- **Photo dates in the scan summary.** `summary` and the `scan_complete` event
+  gain, each as its own property:
+  - `cloudFirstDownloadedDate` / `cloudLastDownloadedDate` — capture date of the
+    first and last photo downloaded from iCloud, and `cloudFirstDownloadedAtMs`
+    / `cloudLastDownloadedAtMs` — when each landed, in ms from the start of the
+    scan.
+  - `matchedFirstDate` / `matchedLastDate` — capture date of the newest and
+    oldest matched photo (the scan runs newest first).
+
+  Dates are `yyyy-MM-dd`, in the phone's time zone. A field is left out when
+  there is nothing to report — no iCloud downloads, or no matches. The date a
+  photo was added to the library is not available from iOS.
+
+---
+
+## [1.3.3] — 2026-10-23
 
 **Mobile iOS only.** The npm package is unchanged. **Controller: update
 recommended.** The 1.3.2 controller keeps working with this page; without the
