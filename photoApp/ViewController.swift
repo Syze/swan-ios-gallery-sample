@@ -226,16 +226,32 @@ final class ViewController: UIViewController {
     /// library and six photos timed out at 10 s; the wait after the local pass
     /// (`cloudTail`/`cloudTailMax`) bounds the scan, so this can be generous.
     static let cloudTimeout: DispatchTimeInterval = .seconds(20)
-    /// Downloads in flight at once.
+    /// Downloads in flight at once. Fewer on mobile data: on a 250KB/s line six
+    /// 0.5MB copies shared it, each took 12 s or more, and 21 of 32 hit
+    /// `cloudTimeout`. At three each finishes in half the time and the total is
+    /// the same, since the line is the limit either way.
     static let cloudParallel = 6
+    static let cloudParallelMobile = 3
     /// A small copy fetched first, about 30KB: faces and people are counted on it
     /// and only a lone person goes on to the full download. Group photos read as
     /// one tall person on a 120px thumbnail.
     static let cloudPreviewPixels: CGFloat = 320
-    /// A full-length candidate is fetched at this size straight away: its face is
-    /// 60 to 90px at the scan's 1536, under the 120px floor, and one bigger copy
-    /// (about 1MB) saves a second trip for every match. Selfies stay at `cloudPixels`.
-    static let cloudFullLengthPixels: CGFloat = 2560
+    /// A full-length candidate is fetched at the scan's own size, as a local photo
+    /// is loaded, about 0.5MB. A bigger copy is fetched only when its face is under
+    /// the 120px floor (see `cloudFloorDeferred`) or, after a match, for the body
+    /// check. Measured on one library at 2560px: 18 of 20 full downloads were
+    /// other people, so the bigger copy was wasted on most. Selfies stay at `cloudPixels`.
+    static let cloudFullLengthPixels: CGFloat = loadPixels
+    /// A downloaded photo whose face is under the floor: `true` matches the small
+    /// face first and fetches the bigger copy only after a match (a stranger costs
+    /// nothing more, but a small face can miss); `false` fetches the bigger copy
+    /// before deciding, as for a local photo, so the decision is always made at
+    /// 120px or more.
+    static let cloudFloorDeferred = false
+    /// The small copy's face box overstates the face at 1536 by about 25% (32
+    /// photos measured); a predicted face under floor × this margin fetches the
+    /// bigger copy straight away rather than landing just under the floor.
+    static let cloudFaceEstimateMargin: CGFloat = 1.25
     /// A single person spanning this much of a thumbnail's height is a full-length candidate.
     /// Measured on 120px thumbnails: 124 of 134 full-length photos pass, 2 of 22 others.
     static let cloudPersonHeight: CGFloat = 0.6
@@ -955,10 +971,13 @@ extension ViewController {
     /// someone else rather than a passer-by, poster or reflection.
     static let bystanderRatio: CGFloat = 0.25
 
-    /// How far the selfie's head may be turned before a retake is asked for. Pitch
-    /// gets more room, since a chin a little down is normal.
-    static let selfieMaxYawDegrees: Double = 20
-    static let selfieMaxPitchDegrees: Double = 25
+    /// How far the selfie's head may be turned before a retake is asked for. The
+    /// same limits as the library's flat-face rule (`MuseScore.tiltedYawDegrees` /
+    /// `tiltedPitchDegrees`), so the shopper's own selfie is never one the scan
+    /// would rank as tilted. Pitch was 25 until 1.3.4: a chin a little down passes
+    /// at 15, a look down at the phone does not.
+    static let selfieMaxYawDegrees: Double = Double(MuseScore.tiltedYawDegrees)
+    static let selfieMaxPitchDegrees: Double = Double(MuseScore.tiltedPitchDegrees)
 
     /// Match against every selfie frame, not only the sharpest: a photo then scores
     /// its second-smallest distance, so the best two frames must agree. Off by default.
@@ -1380,6 +1399,9 @@ extension ViewController {
             // Originals sized after a match — see `checkOriginal`.
             var tooLargeSkipped = 0
             var noOriginal = 0
+            var sizedByPixels = 0
+            // Matches lowered by `MuseScore.tiltMultiplier` (head pitched or turned).
+            var tiltedMatches = 0
             var lowDataSkipped = 0
             var sized = 0
             var downloadedToSize = 0
@@ -1413,7 +1435,7 @@ extension ViewController {
             let cloudQueue = OperationQueue()
             cloudQueue.name = "co.getswan.gallery.cloud"
             cloudQueue.qualityOfService = .userInitiated
-            cloudQueue.maxConcurrentOperationCount = Self.cloudParallel
+            cloudQueue.maxConcurrentOperationCount = Self.cloudOnMobile ? Self.cloudParallelMobile : Self.cloudParallel
             var cloudPreviewOut = 0
             self?.cloudLargerDownloads = 0
             var cloudOnly = 0
@@ -1546,8 +1568,14 @@ extension ViewController {
                                 return (.tooLarge, "original over \(Original.byteCap / 1_048_576)MB")
                             case .unavailable(let reason):
                                 downloadedToSize += 1
+                                let megapixels = Double(asset.pixelWidth * asset.pixelHeight) / 1_000_000
+                                if reason == .tooSlow, Original.sizeByPixelsWhenSlow, megapixels <= Original.sizeByPixelsMaxMegapixels {
+                                    sizedByPixels += 1
+                                    if Self.verboseLogging { print("  \u{1f4cf} [\(n)] original too slow to size — \(String(format: "%.1f", megapixels))MP, assumed under the cap, shown") }
+                                    return nil
+                                }
                                 noOriginal += 1
-                                return (.noOriginal, "original \(reason.rawValue)")
+                                return (.noOriginal, "original \(reason.rawValue), \(String(format: "%.1f", megapixels))MP")
                             case .lowData:
                                 lowDataSkipped += 1
                                 return (.noOriginal, "only in iCloud, Low Data Mode")
@@ -1560,6 +1588,7 @@ extension ViewController {
                         } else {
                             matchedIds.append(asset.localIdentifier)
                             matchScores[asset.localIdentifier] = (distance, type, museScore?.value)
+                            if museScore?.tilted == true { tiltedMatches += 1 }
                             var dupGroup = asset.localIdentifier
                             if let fingerprint = Self.featurePrint(of: image) {
                                 var nearest: (id: String, distance: Float)?
@@ -1689,12 +1718,22 @@ extension ViewController {
                                     let began = Date()
                                     // Small copy first; the full one only for a lone person.
                                     let preview = self?.loadFromCloudResult(asset: asset, pixels: Self.cloudPreviewPixels, timeout: Self.cloudTimeout)
-                                    let check: (passes: Bool, note: String)? = preview?.image.map { self?.cloudPreviewPasses($0, kind: kind) ?? (passes: false, note: "") }
+                                    let check: (passes: Bool, note: String, faceRatio: CGFloat)? = preview?.image.map { self?.cloudPreviewPasses($0, kind: kind) ?? (passes: false, note: "", faceRatio: 0) }
                                     if let check, check.passes {
                                         cloudFullInFlight.add(1)
-                                        var full = self?.loadFromCloudResult(asset: asset, pixels: kind == "selfie" ? Self.cloudPixels : Self.cloudFullLengthPixels, timeout: Self.cloudTimeout)
-                                        // Held as JPEG until the scan reads it: a decoded 2560px image is
-                                        // about 26MB, and dozens may wait for the local pass to end.
+                                        // The small copy's face box says how big the face will be at the
+                                        // scan's size. Under the floor, fetch the bigger copy straight away
+                                        // (the size the scan would ask for anyway) instead of two downloads.
+                                        var pixels = kind == "selfie" ? Self.cloudPixels : Self.cloudFullLengthPixels
+                                        if check.faceRatio > 0, check.faceRatio * pixels < Self.minFacePixels * Self.cloudFaceEstimateMargin {
+                                            pixels = min(Self.fullResPixels, max(pixels, (Self.minFacePixels / check.faceRatio * 1.25).rounded(.up)))
+                                            if Self.verboseLogging { print("  ☁️  [\(n)] \(kind) — small copy face \(Int(check.faceRatio * Self.cloudFullLengthPixels))px at \(Int(Self.cloudFullLengthPixels)), under \(Int(Self.minFacePixels * Self.cloudFaceEstimateMargin)) with margin: fetching \(Int(pixels))px") }
+                                        } else if Self.verboseLogging {
+                                            print("  ☁️  [\(n)] \(kind) — small copy face \(Int(check.faceRatio * pixels))px at \(Int(pixels)): fetching \(Int(pixels))px")
+                                        }
+                                        var full = self?.loadFromCloudResult(asset: asset, pixels: pixels, timeout: Self.cloudTimeout)
+                                        // Held as JPEG until the scan reads it: a decoded 1536px image is
+                                        // about 7MB, and dozens may wait for the local pass to end.
                                         job.data = full?.image?.jpegData(compressionQuality: 0.92)
                                         full?.image = nil
                                         job.box.result = full
@@ -1879,7 +1918,7 @@ extension ViewController {
                 no image    \(noImage)   (in iCloud with no usable copy on the phone, or unreadable)
                 skipped     \(skippedShape)   (from the library record alone: too small to scan, or a panorama)
                 local copy  \(localCopies)   (in iCloud, scanned from the phone's smaller copy)
-                iCloud      \(cloudOnly) only in iCloud; \(cloudSelfieCandidates) looked like selfies, \(cloudFullCandidates) like a full-length photo; \(cloudDownloaded) downloaded (\(String(format: "%.1f", cloudSeconds))s of download time), \(cloudPreviewOut) dropped on the small copy, \(cloudFailed) failed, \(cloudLeft) left (cap \(cloudCap)\(Self.cloudOnMobile ? " on mobile data" : " on Wi-Fi"), waited \(Int(cloudWaited))s after the local pass\(cloudExtended ? " (extended past \(Int(Self.cloudTail))s for confirmed photos)" : "")\(cloudAllowed ? "" : " — no suitable connection"))
+                iCloud      \(cloudOnly) only in iCloud; \(cloudSelfieCandidates) looked like selfies, \(cloudFullCandidates) like a full-length photo; \(cloudDownloaded) downloaded (\(String(format: "%.1f", cloudSeconds))s of download time), \(cloudPreviewOut) dropped on the small copy, \(cloudFailed) failed, \(cloudLeft) left (cap \(cloudCap)\(Self.cloudOnMobile ? " on mobile data, \(Self.cloudParallelMobile)" : " on Wi-Fi, \(Self.cloudParallel)") at a time, waited \(Int(cloudWaited))s after the local pass\(cloudExtended ? " (extended past \(Int(Self.cloudTail))s for confirmed photos)" : "")\(cloudAllowed ? "" : " — no suitable connection"))
                 no face     \(noFace)
                 group       \(groupSkipped)   (skipped: more than one face; \(sameShopper) more had several faces all the shopper's and went on)
                 others      \(otherPeople)   (skipped: someone else in the photo)
@@ -1891,7 +1930,7 @@ extension ViewController {
                 sensitive   \(sensitiveSkipped)   (matched, then filtered)
                 unusable    \(unusableFace)   (matched, but the face is no use for the Muse: sunglasses, hand over it, eyes closed or a wink, cut by the frame, blurred)
                 too large   \(tooLargeSkipped)   (original over \(Original.byteCap / 1_048_576)MB — hidden, nothing is sent compressed)
-                no original \(noOriginal)   (original unreadable or not downloaded in time)
+                no original \(noOriginal)   (original unreadable or not downloaded in time; \(sizedByPixels) too slow to size but shown on pixel count)
                 low data    \(lowDataSkipped)   (only in iCloud, not downloaded — Low Data Mode is on)
                 sized       \(sized) original(s), \(downloadedToSize) from iCloud, \(String(format: "%.1f", sizingSeconds))s
                 duplicates  \(duplicates)   (matches that repeat an earlier one; shown, but only one of each is pre-selected)
@@ -1942,6 +1981,12 @@ extension ViewController {
                 summary["matchedFront"] = found[.front, default: 0]
                 summary["matchedSide"] = found[.side, default: 0]
                 summary["kneeLength"] = kneeLength
+                // Matches lowered for a pitched or turned head; shown on pixel count
+                // because the original was too slow to size; downloads in flight at
+                // once (3 on mobile data, 6 on Wi-Fi).
+                summary["tilted"] = tiltedMatches
+                summary["sizedByPixels"] = sizedByPixels
+                summary["cloudParallel"] = Self.cloudOnMobile ? Self.cloudParallelMobile : Self.cloudParallel
                 summary["model"] = Self.faceModel.rawValue
                 summary["cutoff"] = Self.matchThreshold
                 summary["frames"] = self?.lastReferenceFrames ?? 1
@@ -2102,6 +2147,10 @@ struct MuseScore {
     let handOnFace: Bool
     /// A cap or hat: ranked lower, never filtered — see `capMultiplier`.
     let capped: Bool
+    /// A selfie whose head is not level with the camera: ranked lower, never
+    /// filtered — see `tiltMultiplier`. The angles, in degrees, for the console note.
+    let tilted: Bool
+    let headDegrees: (yaw: Float, pitch: Float)
     /// A smile stays in and ranks lower: closed lips by `closedSmileMultiplier`,
     /// teeth or open mouth by `openSmileMultiplier`.
     enum Smile: String { case none = "", closed, open }
@@ -2128,7 +2177,9 @@ struct MuseScore {
     let busy: Bool
 
     /// Apple's capture quality carries the most; the three expression terms together
-    /// carry 0.35, which puts a neutral face above a smile, stare or wink.
+    /// carry 0.35, which puts a neutral face above a smile, stare or wink. A selfie
+    /// looking up or down at the camera is handled by `tiltMultiplier`, not by
+    /// these weights, so the order among level faces stays as it was.
     static let weights: [(name: String, weight: Float)] = [
         ("quality", 0.25), ("pose", 0.15), ("light", 0.10), ("size", 0.10),
         ("mouth", 0.15), ("eyes", 0.10), ("brow", 0.10), ("sharp", 0.05),
@@ -2209,6 +2260,16 @@ struct MuseScore {
 
     /// Head turn, in degrees, at which the pose term reaches 0.
     static let poseLimitDegrees: Float = 30
+    /// Past these a selfie's head is clearly not level with the camera and it
+    /// keeps `tiltMultiplier` of its score, like a cap: behind every level face,
+    /// never hidden. Selfies only: a side view has the head turned by definition,
+    /// and a front's face is read through the pose term as before. Pitch (looking
+    /// up or down) gets less room than yaw because that is the angle a Muse
+    /// suffers from most; Vision's pitch from a flat photo is a rougher reading
+    /// than its yaw, so it is not set tighter than this.
+    static let tiltedPitchDegrees: Float = 15
+    static let tiltedYawDegrees: Float = 20
+    static let tiltMultiplier: Float = 0.6
     /// Face width, in pixels of the scan's render, that scores a full size term.
     static let fullSizePixels: Float = 400
     /// Eye height over width: about this and above reads as open, half of it
@@ -2227,7 +2288,7 @@ struct MuseScore {
 
     init(face: VNFaceObservation, in image: CGImage, handler: VNImageRequestHandler, faceWidth: CGFloat,
          expression: FaceExpression? = nil, labels: [String: Float] = [:], handOnFace: Bool = false,
-         outfit: Outfit = Outfit(label: nil, dressy: 0, busy: 0)) {
+         outfit: Outfit = Outfit(label: nil, dressy: 0, busy: 0), selfie: Bool = false) {
         let clamp = { (v: Float) in max(0, min(1, v)) }
         var parts: [(name: String, value: Float)] = []
         var filter: String?
@@ -2262,6 +2323,7 @@ struct MuseScore {
         let yaw = degrees(face.yaw), pitch = degrees(face.pitch), roll = degrees(face.roll)
         let pose = clamp(1 - yaw / Self.poseLimitDegrees) * clamp(1 - pitch / Self.poseLimitDegrees) * clamp(1 - roll / (Self.poseLimitDegrees * 0.66))
         parts.append(("pose", pose))
+        let tilted = selfie && (pitch > Self.tiltedPitchDegrees || yaw > Self.tiltedYawDegrees)
 
         // Light, from a 64px copy of the face with a little margin.
         let size = CGSize(width: image.width, height: image.height)
@@ -2352,6 +2414,8 @@ struct MuseScore {
         self.labels = labels
         self.handOnFace = handOnFace
         self.capped = capped
+        self.tilted = tilted
+        self.headDegrees = (yaw, pitch)
         self.smile = smile
         self.wideEyed = wideEyed
         self.lowered = lowered
@@ -2365,6 +2429,7 @@ struct MuseScore {
         // score 0.5–1, demoted ones 0–0.5. The outfit only moves a photo within its band.
         var multiplier: Float = 1
         if capped { multiplier *= Self.capMultiplier }
+        if tilted { multiplier *= Self.tiltMultiplier }
         if smile == .closed { multiplier *= Self.closedSmileMultiplier }
         if smile == .open { multiplier *= Self.openSmileMultiplier }
         if wideEyed { multiplier *= Self.wideEyedMultiplier }
@@ -2384,6 +2449,8 @@ struct MuseScore {
         // In pieces: one literal this long is more than the type-checker will take.
         var extraParts: [String?] = [expression?.note, seen.isEmpty ? nil : "labels " + seen, handOnFace ? "hand on face" : nil]
         extraParts.append(capped ? "cap ×\(Self.capMultiplier)" : nil)
+        extraParts.append(String(format: "head yaw %.0f° pitch %.0f°", headDegrees.yaw, headDegrees.pitch))
+        extraParts.append(tilted ? "tilted ×\(Self.tiltMultiplier)" : nil)
         extraParts.append(smile == .closed ? "closed smile ×\(Self.closedSmileMultiplier)" : nil)
         extraParts.append(smile == .open ? "open smile ×\(Self.openSmileMultiplier)" : nil)
         extraParts.append(wideEyed ? "wide-eyed ×\(Self.wideEyedMultiplier)" : nil)
@@ -2691,7 +2758,7 @@ struct ScanEval {
         let name = "swan-eval-\(stamp.string(from: Date())).csv"
 
         let number = { (value: Double?) in value.map { String(format: "%.4f", $0) } ?? "" }
-        var lines = ["id,gate,labelled,gridRank,distance,type,joints,ankles,headSeen,span,footRoom,people,shoulders,hips,headSays,faceRatio,yaw,pitch,quality,rotated,screenshot,fullRes,taken,original,renderWidth,originalKB,score,sQuality,sPose,sLight,sSize,sMouth,sEyes,sBrow,sSharp,sFilter,exprSmile,exprJaw,exprBlinkL,exprBlinkR,exprBrow,exprSquint,exprWide,exprTeeth,sunglasses,hat,handOnFace,capped,smile,wideEyed,lowered,dressy,busy,outfitLabel"]
+        var lines = ["id,gate,labelled,gridRank,distance,type,joints,ankles,headSeen,span,footRoom,people,shoulders,hips,headSays,faceRatio,yaw,pitch,quality,rotated,screenshot,fullRes,taken,original,renderWidth,originalKB,score,sQuality,sPose,sLight,sSize,sMouth,sEyes,sBrow,sSharp,sFilter,exprSmile,exprJaw,exprBlinkL,exprBlinkR,exprBrow,exprSquint,exprWide,exprTeeth,exprGazeUp,exprGazeDown,exprGazeSide,sunglasses,hat,handOnFace,capped,tilted,smile,wideEyed,lowered,dressy,busy,outfitLabel"]
         for record in records {
             // Typed, and in three parts: one literal this long is more than Swift's
             // type-checker will solve in reasonable time.
@@ -2752,10 +2819,13 @@ struct ScanEval {
             exprFields.append(exprNumber { $0.squint })
             exprFields.append(exprNumber { $0.eyeWide })
             exprFields.append(exprNumber { $0.teeth })
+            exprFields.append(exprNumber { $0.gazeUp })
+            exprFields.append(exprNumber { $0.gazeDown })
+            exprFields.append(exprNumber { $0.gazeSide })
             let flagFields: [String] = [
                 number(record.score?.labels["sunglasses"].map { Double($0) }), number(hat.map { Double($0) }),
                 record.score.map { String($0.handOnFace) } ?? "", record.score.map { String($0.capped) } ?? "",
-                record.score?.smile.rawValue ?? "", record.score.map { String($0.wideEyed) } ?? "", record.score?.lowered.joined(separator: " ") ?? "",
+                record.score.map { String($0.tilted) } ?? "", record.score?.smile.rawValue ?? "", record.score.map { String($0.wideEyed) } ?? "", record.score?.lowered.joined(separator: " ") ?? "",
                 number(record.score.map { Double($0.outfit.dressy) }), number(record.score.map { Double($0.outfit.busy) }),
                 record.score?.outfit.label ?? "",
             ]
@@ -3093,9 +3163,19 @@ enum Original {
     /// How long an upload waits for one file, inside the web layer's own 30s deadline.
     static let readTimeout: DispatchTimeInterval = .seconds(20)
 
-    /// How long the scan waits to size one iCloud-only original; a photo that cannot
-    /// be sized in time is hidden.
-    static let sizeTimeout: DispatchTimeInterval = .seconds(10)
+    /// How long the scan waits to size one iCloud-only original. 20 s, as
+    /// `cloudTimeout`: at 10 s a matched iCloud photo was hidden as "original too
+    /// slow" on a run where every copy took 7 to 10 s.
+    static let sizeTimeout: DispatchTimeInterval = .seconds(20)
+    /// When sizing an iCloud original still times out (several downloads and a
+    /// throttled iCloud), a matched photo is shown rather than hidden if its
+    /// pixel count says the original cannot be over the byte cap: under this
+    /// many megapixels a camera HEIC or JPEG is a few MB. Only 48MP shots and
+    /// ProRAW sit above it, and those are hidden as before. The upload fetches
+    /// the original later with its own retry. 30, not 24: a phone's "24MP"
+    /// default is 5712x4284, 24.5MP, and sat just over the line.
+    static let sizeByPixelsWhenSlow = true
+    static let sizeByPixelsMaxMegapixels: Double = 30
 
     /// Marks the paired video of a Live Photo, appended to the asset id. The two
     /// halves travel as two uploads and the service pairs them by stripping this.
@@ -3853,15 +3933,16 @@ extension ViewController {
     /// Second look at a candidate on its small copy before the full download: at
     /// most one face, and the same shape test as the thumbnail, now with pixels
     /// enough to tell a group from one person.
-    func cloudPreviewPasses(_ image: UIImage, kind: String) -> (passes: Bool, note: String) {
-        guard let cgImage = image.cgImage else { return (false, "unreadable") }
+    func cloudPreviewPasses(_ image: UIImage, kind: String) -> (passes: Bool, note: String, faceRatio: CGFloat) {
+        guard let cgImage = image.cgImage else { return (false, "unreadable", 0) }
         let faces = VNDetectFaceRectanglesRequest()
         try? VNImageRequestHandler(cgImage: cgImage, orientation: Self.cgOrientation(image.imageOrientation), options: [:])
             .perform([faces])
         let faceCount = faces.results?.count ?? 0
-        guard faceCount <= 1 else { return (false, "\(faceCount) faces") }
+        let faceRatio = faces.results?.map(\.boundingBox.width).max() ?? 0
+        guard faceCount <= 1 else { return (false, "\(faceCount) faces", faceRatio) }
         let shaped = kind == "selfie" ? isSelfieShaped(image) : isFullLengthShaped(image)
-        return (shaped, shaped ? "\(faceCount) face" : "\(faceCount) face, not one standing person")
+        return (shaped, shaped ? "\(faceCount) face" : "\(faceCount) face, not one standing person", faceRatio)
     }
 
     /// The largest face Vision finds, or nil.
@@ -4073,16 +4154,24 @@ extension ViewController {
         func largerRender() -> CGImage? {
             if !largerLoaded {
                 largerLoaded = true
-                largerCache = loadPhoto(asset: asset, pixels: Self.fullResPixels)?.cgImage
+                // `loadPhotoResult`, not `loadPhoto`: the latter rewrites
+                // `lastLoadFromCloud`, and for an iCloud photo with no copy on the
+                // phone it set it false, so the fetch below never ran.
+                largerCache = loadPhotoResult(asset: asset, pixels: Self.fullResPixels).image?.cgImage
                     .flatMap { $0.width > cgImage.width ? $0 : nil }
                 // A photo that came from iCloud has no bigger copy on the phone. Fetch
                 // one just large enough for the face floor, not the full original.
                 if largerCache == nil, lastLoadFromCloud, Self.cloudDownloadsAllowed {
                     let ratio = faces.map(\.boundingBox.width).max() ?? 0
                     let needed = min(Self.fullResPixels, max(Self.loadPixels * 1.5, Self.minFacePixels / max(ratio, 0.01) * 1.25))
-                    largerCache = loadFromCloudResult(asset: asset, pixels: needed, timeout: Self.cloudTimeout).image?.cgImage
-                        .flatMap { $0.width > cgImage.width ? $0 : nil }
+                    let began = Date()
+                    let fetched = loadFromCloudResult(asset: asset, pixels: needed, timeout: Self.cloudTimeout)
+                    largerCache = fetched.image?.cgImage.flatMap { $0.width > cgImage.width ? $0 : nil }
                     if largerCache != nil { cloudLargerDownloads += 1 }
+                    if Self.verboseLogging {
+                        let got = fetched.image?.cgImage.map { "\($0.width)x\($0.height)" } ?? "nothing (\(fetched.note))"
+                        print("  ☁️  bigger copy for a \(Int(widest))px face: asked \(Int(needed))px, got \(got) in \(String(format: "%.1f", Date().timeIntervalSince(began)))s\(largerCache == nil ? " — not bigger than \(cgImage.width)px, decided on this copy" : "")")
+                    }
                 }
             }
             return largerCache
@@ -4096,7 +4185,7 @@ extension ViewController {
         var floorDeferred = false
         if widest < Self.minFacePixels {
             guard widestRatio * CGFloat(asset.pixelWidth) >= Self.minFacePixels else { return .faceTooSmall(pixels: Int(widest)) }
-            if lastLoadFromCloud {
+            if lastLoadFromCloud, Self.cloudFloorDeferred {
                 floorDeferred = true
             } else {
                 guard let larger = largerRender(), widestRatio * CGFloat(larger.width) >= Self.minFacePixels
@@ -4212,7 +4301,7 @@ extension ViewController {
         }
         var source = cgImage
         // A downloaded photo fetches its bigger copy only once the face has matched.
-        if widest < Self.fullResFaceBelow, !lastLoadFromCloud || matchedSoFar, let larger = largerRender() {
+        if widest < Self.fullResFaceBelow, !lastLoadFromCloud || matchedSoFar || largerCache != nil, let larger = largerRender() {
             source = larger
             lastCropFullRes = true
         }
@@ -4222,10 +4311,10 @@ extension ViewController {
         var museScore: MuseScore?
         if (scored.distances.min() ?? 1) < Self.matchThreshold {
             museScore = timed("score") {
-            let context = museContext(face: faces[0], in: cgImage, handler: handler)
+                let context = museContext(face: faces[0], in: cgImage, handler: handler)
                 return timed("score.terms") { MuseScore(face: faces[0], in: cgImage, handler: handler, faceWidth: widest,
-                                  expression: context.expression, labels: context.labels, handOnFace: context.handOnFace,
-                                                         outfit: context.outfit) }
+                                                         expression: context.expression, labels: context.labels, handOnFace: context.handOnFace,
+                                                         outfit: context.outfit, selfie: type == .selfie) }
             }
         }
         return .scored(distances: scored.distances, facePixels: Int(scored.faceWidth), body: body, type: type, profile: profile, museScore: museScore)

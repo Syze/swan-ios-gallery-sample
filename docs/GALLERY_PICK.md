@@ -726,7 +726,7 @@ size videos.
 |---|---|---|
 | `error: "no-face-in-selfie"` | No face in the reference | Selfie screen, retake |
 | `error: "several-faces-in-selfie"` | Another person in the selfie, at least a quarter the size of the main face | Selfie screen, retake |
-| `error: "selfie-not-frontal"` | Head turned more than 20° or tilted more than 25° | Selfie screen, retake |
+| `error: "selfie-not-frontal"` | Head turned more than 20° or tilted more than 15° (25° before 1.3.4) | Selfie screen, retake |
 | `error: "no-reference"` | Reference could not be decoded | Selfie screen |
 | `denied: true` | Photo library access refused | A screen of its own, with *Open Settings* |
 | `limited: true` | Only selected photos shared | Picker, with an *Add more photos* button that sends `GALLERY_PICK_MORE` |
@@ -1059,10 +1059,23 @@ Every release has its own address, for example
   reference host logs it.
 - **Each release says whether `ViewController.swift` needs updating.**
 
-### 1.3.4 — 26 October 2026
+### 1.3.4 — 27 October 2026
 
-**Controller:** update recommended for the new fields; older controllers keep
-working without them.
+**Controller:** update recommended. Older controllers keep working; without
+the update, iCloud photos with a small face are matched on too small a copy,
+the flat-face ranking does not apply, and the new fields are not sent. The
+full list is in `CHANGELOG.md`.
+
+**Flow**
+
+- Library selfies with the head pitched more than 15° or turned more than 20°
+  rank below every level selfie; never hidden. Fronts and sides unchanged.
+- The camera selfie is sent back (`selfie-not-frontal`) from 15° of tilt,
+  was 25°.
+- iCloud photos are fetched at the scan's own size, a bigger copy only when
+  the face would be too small; three downloads at a time on mobile data, six
+  on Wi-Fi. A matched iCloud photo whose original is too slow to size is
+  shown when its pixel count rules out the 10MB cap.
 
 **Setup**
 
@@ -1071,6 +1084,7 @@ working without them.
   `yyyy-MM-dd`), `cloudFirstDownloadedAtMs`, `cloudLastDownloadedAtMs` (ms from
   the start of the scan), and `matchedFirstDate`, `matchedLastDate` (newest and
   oldest match).
+- `summary` gains `tilted`, `sizedByPixels`, `cloudParallel`.
 
 ### 1.3.3 — 23 October 2026
 

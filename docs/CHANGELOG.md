@@ -20,11 +20,12 @@ onwards; those entries are kept for reference and need nothing on your side.
 
 ---
 
-## [1.3.4] — 2026-10-26
+## [1.3.4] — 2026-10-27
 
 **Mobile iOS only.** The npm package is unchanged. **Controller: update
-recommended** for the new fields; older controllers keep working and simply do
-not send them.
+recommended.** Older controllers keep working; without the update, iCloud
+photos with a small face are matched on too small a copy (see Fixed), the
+flat-face ranking does not apply, and the new fields are not sent.
 
 ```
 https://swan-mobile-web-component.swan.so/v1.3.4/index.html
@@ -44,6 +45,46 @@ https://swan-mobile-web-component.swan.so/v1.3.4/index.html
   Dates are `yyyy-MM-dd`, in the phone's time zone. A field is left out when
   there is nothing to report — no iCloud downloads, or no matches. The date a
   photo was added to the library is not available from iOS.
+
+- **Flat face first.** A selfie from the library whose head is pitched more
+  than 15° up or down, or turned more than 20°, is ranked below every level
+  selfie: it keeps 0.6 of its Muse score, in the lower band, like a cap. Never
+  hidden. Fronts and sides are not affected — a side view has the head turned
+  by definition. Every match line in the console shows `head yaw N° pitch N°`;
+  `summary.tilted` counts the lowered matches.
+
+- **Camera selfie held to the same angles.** `selfie-not-frontal` is now sent
+  for a head tilted more than 15° (was 25°); the 20° turn limit is unchanged.
+  The two limits are one pair of constants in the controller.
+
+- **More in `summary`:** `tilted` (above), `sizedByPixels` (matches shown on
+  pixel count because the original was too slow to size, see Changed) and
+  `cloudParallel` (downloads in flight at once on this scan: 3 on mobile data,
+  6 on Wi-Fi). The expression reader also logs where the eyes point (`gaze up /
+  down / side` on the match line, three eval CSV columns); information only,
+  no rule uses it.
+
+### Changed
+
+- **iCloud downloads are the scan's own size.** A full-length candidate is
+  fetched at 1536 px, as a local photo is loaded, about 0.5 MB instead of
+  2560 px and about 1.2 MB. A bigger copy is fetched only when the small copy
+  says the face will be under the 120 px floor, or after a match for the body
+  check. On a slow line three downloads run at once on mobile data (six on
+  Wi-Fi): on a 250 KB/s connection six at once each took over 12 s and most
+  timed out.
+
+- **Sizing an iCloud original gets 20 s** (was 10), and a matched photo whose
+  original still cannot be sized in time is shown on its pixel count when the
+  original cannot be over the 10 MB cap (30 megapixels or under; a phone's
+  24 MP default is 24.5 MP). 48 MP and ProRAW photos are hidden as before.
+
+### Fixed
+
+- **The bigger copy for a small face was never fetched for an iCloud photo.**
+  The fetch reset the flag that said the photo came from iCloud, so a face
+  under the floor was matched on the 1536 px copy, or skipped as too small,
+  instead of on a larger one. Present since the iCloud pass in 1.3.2.
 
 ---
 

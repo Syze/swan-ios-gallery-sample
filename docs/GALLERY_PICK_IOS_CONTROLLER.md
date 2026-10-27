@@ -1,4 +1,4 @@
-# Gallery Pick — iOS controller notes for 1.3.3
+# Gallery Pick — iOS controller notes for 1.3.4
 
 What the native code does on the phone, what it is built from, how each part
 is licensed, and what leaves the device. Companion to `CHANGELOG.md` and
@@ -44,9 +44,12 @@ Every step of finding and filtering photos is on the device:
    months-back window. A photo that is only in iCloud is judged from the
    thumbnail the phone keeps; if it looks like a selfie or one standing person,
    the phone asks iCloud for a 30 KB copy to confirm one person, then for the
-   photo itself. These are Apple Photos downloads of the user's own photos, on
-   Wi-Fi or mobile data, Low Data Mode included, up to 200 on Wi-Fi and 100 on
-   mobile data per scan. The scan waits 30 seconds after the local pass for
+   photo itself at the scan's own size (1536 px, about 0.5 MB), or a larger
+   copy when the face would otherwise be too small to compare. These are Apple
+   Photos downloads of the user's own photos, on Wi-Fi or mobile data, Low
+   Data Mode included, up to 200 on Wi-Fi and 100 on mobile data per scan, six
+   at a time on Wi-Fi and three on mobile data. The scan waits 30 seconds after
+   the local pass for
    downloads still in progress, and up to 90 seconds while a photo the small
    copy confirmed is still coming down (a library that is all in iCloud has
    nothing to match until then). Both are constants in the controller.
@@ -57,9 +60,11 @@ Every step of finding and filtering photos is on the device:
    distance under 0.60 is a match. Borderline matches are decided at the end
    of the scan.
 4. Matches are scored for the Muse with Apple Vision (face quality, pose,
-   light, sharpness, hats, sunglasses, hands, clothing) and the MediaPipe
-   expression model (smile, blink, brows, eyes). Some are dropped, the rest
-   ranked. Repeated shots are grouped with Apple's image fingerprint.
+   head angle, light, sharpness, hats, sunglasses, hands, clothing) and the
+   MediaPipe expression model (smile, blink, brows, eyes; eye direction is
+   logged but not used). Some are dropped, the rest ranked; a selfie with the
+   head pitched over 15° or turned over 20° ranks below the level ones.
+   Repeated shots are grouped with Apple's image fingerprint.
 5. The page shows the ranked grid and pre-selects five.
 
 All models load from the app bundle. No model, image, face measurement or

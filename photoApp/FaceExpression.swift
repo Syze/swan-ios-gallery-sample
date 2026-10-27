@@ -32,6 +32,14 @@ struct FaceExpression {
     /// larger of the two pairs' means. Smiles with the lips closed measure
     /// 0.00–0.11, smiles showing teeth 0.2 and up.
     let teeth: Float
+    /// Where the eyes point, from the eye-look blendshapes: up and down are
+    /// the means of the two eyes, side is the stronger of the two sideways
+    /// pairs (left eye in + right eye out, or the reverse). Logged only: from a
+    /// flat photo these mix in head angle, lid position and face size, and on
+    /// four checked photos they did not match what the eyes were doing.
+    let gazeUp: Float
+    let gazeDown: Float
+    let gazeSide: Float
     let ms: Int
 
     /// The more open eye: a wink leaves one eye open and scores low here while
@@ -41,7 +49,7 @@ struct FaceExpression {
     var blinkBoth: Float { min(blinkLeft, blinkRight) }
 
     var note: String {
-        String(format: "expr smile %.2f jaw %.2f blink %.2f/%.2f brow %.2f wide %.2f teeth %.2f (%dms)", smile, jawOpen, blinkLeft, blinkRight, browUp, eyeWide, teeth, ms)
+        String(format: "expr smile %.2f jaw %.2f blink %.2f/%.2f brow %.2f wide %.2f teeth %.2f gaze up %.2f down %.2f side %.2f (%dms)", smile, jawOpen, blinkLeft, blinkRight, browUp, eyeWide, teeth, gazeUp, gazeDown, gazeSide, ms)
     }
 
     /// `face_landmarker.task` in the app bundle, float16 with blendshapes, 3.7 MB.
@@ -105,6 +113,10 @@ struct FaceExpression {
             eyeWide: max(value("eyeWideLeft"), value("eyeWideRight")),
             teeth: max((value("mouthUpperUpLeft") + value("mouthUpperUpRight")) / 2,
                        (value("mouthLowerDownLeft") + value("mouthLowerDownRight")) / 2),
+            gazeUp: (value("eyeLookUpLeft") + value("eyeLookUpRight")) / 2,
+            gazeDown: (value("eyeLookDownLeft") + value("eyeLookDownRight")) / 2,
+            gazeSide: max((value("eyeLookInLeft") + value("eyeLookOutRight")) / 2,
+                          (value("eyeLookOutLeft") + value("eyeLookInRight")) / 2),
             ms: Int(Date().timeIntervalSince(started) * 1000))
     }
 }
