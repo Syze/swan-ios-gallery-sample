@@ -58,9 +58,13 @@ https://swan-mobile-web-component.swan.so/v1.3.4/index.html
   The two limits are one pair of constants in the controller.
 
 - **More in `summary`:** `tilted` (above), `sizedByPixels` (matches shown on
-  pixel count because the original was too slow to size, see Changed) and
+  pixel count because the original was too slow to size, see Changed),
   `cloudParallel` (downloads in flight at once on this scan: 3 on mobile data,
-  6 on Wi-Fi). The expression reader also logs where the eyes point (`gaze up /
+  6 on Wi-Fi) and `cloudFailures`, why iCloud downloads failed, as counts by
+  reason: `diskFull` (Photos refuses every download when the phone is nearly
+  out of space, iOS error "Disk space is very low"; freeing space is the only
+  fix), `timedOut`, `other`. Left out when nothing failed. The console summary
+  line shows the same breakdown after "failed". The expression reader also logs where the eyes point (`gaze up /
   down / side` on the match line, three eval CSV columns); information only,
   no rule uses it.
 

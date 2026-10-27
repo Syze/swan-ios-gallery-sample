@@ -1084,7 +1084,9 @@ full list is in `CHANGELOG.md`.
   `yyyy-MM-dd`), `cloudFirstDownloadedAtMs`, `cloudLastDownloadedAtMs` (ms from
   the start of the scan), and `matchedFirstDate`, `matchedLastDate` (newest and
   oldest match).
-- `summary` gains `tilted`, `sizedByPixels`, `cloudParallel`.
+- `summary` gains `tilted`, `sizedByPixels`, `cloudParallel`, and
+  `cloudFailures` (iCloud download failures by reason: `diskFull`,
+  `timedOut`, `other`; absent when none failed).
 
 ### 1.3.3 — 23 October 2026
 

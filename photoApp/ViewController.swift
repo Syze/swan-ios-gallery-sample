@@ -1786,6 +1786,8 @@ extension ViewController {
             var cloudFirstDownloaded: (day: String?, atMs: Int)?
             var cloudLastDownloaded: (day: String?, atMs: Int)?
             var cloudFailed = 0
+            // Failures by reason (`LoadResult.cloudFailure`): diskFull, timedOut, other.
+            var cloudFailures: [String: Int] = [:]
             var cloudSeconds = 0.0
             let cloudPassStarted = Date()
             if !cloudCandidates.isEmpty && !cloudAllowed {
@@ -1834,6 +1836,7 @@ extension ViewController {
                     self?.applyLoad(job.box.result)
                     guard let image = job.box.result?.image else {
                         cloudFailed += 1
+                        cloudFailures[job.box.result?.cloudFailure ?? "other", default: 0] += 1
                         noImage += 1
                         eval.note(job.asset, image: nil, gate: .noImage)
                         if Self.verboseLogging { print("  ☁️  [\(job.n)] \(job.box.result?.note ?? "iCloud download failed")") }
@@ -1918,7 +1921,7 @@ extension ViewController {
                 no image    \(noImage)   (in iCloud with no usable copy on the phone, or unreadable)
                 skipped     \(skippedShape)   (from the library record alone: too small to scan, or a panorama)
                 local copy  \(localCopies)   (in iCloud, scanned from the phone's smaller copy)
-                iCloud      \(cloudOnly) only in iCloud; \(cloudSelfieCandidates) looked like selfies, \(cloudFullCandidates) like a full-length photo; \(cloudDownloaded) downloaded (\(String(format: "%.1f", cloudSeconds))s of download time), \(cloudPreviewOut) dropped on the small copy, \(cloudFailed) failed, \(cloudLeft) left (cap \(cloudCap)\(Self.cloudOnMobile ? " on mobile data, \(Self.cloudParallelMobile)" : " on Wi-Fi, \(Self.cloudParallel)") at a time, waited \(Int(cloudWaited))s after the local pass\(cloudExtended ? " (extended past \(Int(Self.cloudTail))s for confirmed photos)" : "")\(cloudAllowed ? "" : " — no suitable connection"))
+                iCloud      \(cloudOnly) only in iCloud; \(cloudSelfieCandidates) looked like selfies, \(cloudFullCandidates) like a full-length photo; \(cloudDownloaded) downloaded (\(String(format: "%.1f", cloudSeconds))s of download time), \(cloudPreviewOut) dropped on the small copy, \(cloudFailed) failed\(cloudFailures.isEmpty ? "" : " (" + cloudFailures.sorted { $0.key < $1.key }.map { "\($0.key) \($0.value)" }.joined(separator: ", ") + ")"), \(cloudLeft) left (cap \(cloudCap)\(Self.cloudOnMobile ? " on mobile data, \(Self.cloudParallelMobile)" : " on Wi-Fi, \(Self.cloudParallel)") at a time, waited \(Int(cloudWaited))s after the local pass\(cloudExtended ? " (extended past \(Int(Self.cloudTail))s for confirmed photos)" : "")\(cloudAllowed ? "" : " — no suitable connection"))
                 no face     \(noFace)
                 group       \(groupSkipped)   (skipped: more than one face; \(sameShopper) more had several faces all the shopper's and went on)
                 others      \(otherPeople)   (skipped: someone else in the photo)
@@ -2008,6 +2011,9 @@ extension ViewController {
                 summary["cloudLargerDownloads"] = self?.cloudLargerDownloads ?? 0
                 summary["cloudDownloaded"] = cloudDownloaded
                 summary["cloudFailed"] = cloudFailed
+                // Why they failed: diskFull (Photos refuses to download on a nearly
+                // full phone), timedOut, other. Left out when nothing failed.
+                if !cloudFailures.isEmpty { summary["cloudFailures"] = cloudFailures }
                 summary["cloudLeft"] = cloudLeft
                 summary["cloudWaitMs"] = Int(cloudWaited * 1000)
                 summary["cloudFirstDownloadedDate"] = cloudFirstDownloaded?.day
@@ -3785,6 +3791,11 @@ extension ViewController {
         var thumbnail: UIImage?
         /// Came down from iCloud in this scan, so a bigger copy must come the same way.
         var fromCloud = false
+        /// Why an iCloud fetch returned nothing: `diskFull` (Photos refuses to
+        /// download when the phone is nearly out of space), `timedOut`, or
+        /// `other`. Counted per scan so analytics can tell a full phone from a
+        /// slow line.
+        var cloudFailure: String?
     }
     final class LoadBox { var result: LoadResult? }
 
@@ -3883,20 +3894,30 @@ extension ViewController {
 
         let done = DispatchSemaphore(value: 0)
         var result: UIImage?
+        var error: NSError?
         let request = PHImageManager.default().requestImage(for: asset, targetSize: CGSize(width: pixels, height: pixels),
                                                             contentMode: .aspectFit, options: options) { image, info in
             // High quality delivers once, when it is final.
             if info?[PHImageResultIsDegradedKey] as? Bool != true {
                 result = image
+                error = info?[PHImageErrorKey] as? NSError
                 done.signal()
             }
         }
         if done.wait(timeout: .now() + timeout) == .timedOut {
             PHImageManager.default().cancelImageRequest(request)
             out.note = "iCloud download timed out"
+            out.cloudFailure = "timedOut"
             return out
         }
-        if result == nil { out.note = "iCloud download failed" }
+        if result == nil {
+            // Photos reports a nearly full phone as CloudPhotoLibraryErrorDomain
+            // 1005, "Disk space is very low": it will not download anything until
+            // space is freed, and no retry of ours helps.
+            let diskFull = error.map { $0.domain == "CloudPhotoLibraryErrorDomain" && $0.code == 1005 } ?? false
+            out.cloudFailure = diskFull ? "diskFull" : "other"
+            out.note = "iCloud download failed" + (error.map { " — \(diskFull ? "disk space very low" : $0.localizedDescription) (\($0.domain) \($0.code))" } ?? "")
+        }
         out.rotated = result.map { $0.imageOrientation != .up } ?? false
         out.image = result.map(Self.upright)
         out.fromCloud = true
