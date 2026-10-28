@@ -1,6 +1,6 @@
 
 
-// Swan Gallery Pick host — pairs with Swan mobile 1.3.4. Release notes and
+// Swan Gallery Pick host — pairs with Swan mobile 1.3.5. Release notes and
 // whether this file needs updating: CHANGELOG.md.
 
 import UIKit
@@ -15,7 +15,7 @@ final class ViewController: UIViewController {
 
     /// Where the SDK bundle is served from. Must be **https** — getUserMedia needs
     /// a secure context, so an http or file:// URL gives no camera.
-    let sdkURL = URL(string: "https://swan-mobile-web-component.swan.so/v1.3.4/index.html")!
+    let sdkURL = URL(string: "https://swan-mobile-web-component.swan.so/v1.3.5/index.html")!
 
     static let bridgeName = "swanBridge"
 
@@ -190,6 +190,14 @@ final class ViewController: UIViewController {
     /// How many faces in the last photo examined were the shopper's. Above 1 it was
     /// a mirror shot — see `sameShopperFacesMax`. Read by the scan log and summary.
     var lastShopperFaces = 1
+    /// Results kept between scans — see `ScanStore`. Opened per scan for the
+    /// signed-in account; nil when the store is off.
+    var scanStore: ScanStore?
+    /// Face vectors of the faces `matchPerson` last embedded, largest first, one
+    /// per face it kept. Empty when any face could not be embedded. Written to
+    /// the store beside the verdict, so the next scan compares a new selfie with
+    /// them instead of loading the photo.
+    var lastEmbeddings: [[Float]] = []
 
     /// The smallest local copy worth scanning, on its longer side. Under this only a
     /// thumbnail is held, too blurred to read a face, so the photo is "no image".
@@ -226,6 +234,11 @@ final class ViewController: UIViewController {
     /// library and six photos timed out at 10 s; the wait after the local pass
     /// (`cloudTail`/`cloudTailMax`) bounds the scan, so this can be generous.
     static let cloudTimeout: DispatchTimeInterval = .seconds(20)
+    /// On mobile data, where a 0.5MB copy measured 8 to 17 s and a matched
+    /// photo timed out at 20 s on a 3,500-photo library (28 Oct 2026).
+    static let cloudTimeoutMobile: DispatchTimeInterval = .seconds(30)
+    /// The per-photo limit for the current connection.
+    static var cloudTimeoutNow: DispatchTimeInterval { cloudOnMobile ? cloudTimeoutMobile : cloudTimeout }
     /// Downloads in flight at once. Fewer on mobile data: on a 250KB/s line six
     /// 0.5MB copies shared it, each took 12 s or more, and 21 of 32 hit
     /// `cloudTimeout`. At three each finishes in half the time and the total is
@@ -1363,10 +1376,17 @@ extension ViewController {
         // A no-op unless eval mode is on and the answer-key album exists.
         let evalLabels = loadEvalLabels()
 
+        // What earlier scans learned about this account's photos — see `ScanStore`.
+        scanStore = ScanStore.open(for: session?.email ?? "")
+        // Captured for this scan: a scan started on top of this one opens its own,
+        // and the two never share a dictionary.
+        let store = scanStore
+        if let store { print("\u{1f4be} Scan store: \(store.count) photo(s) remembered from earlier scans") }
+
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             var matchedIds: [String] = []
             // Score and type per match, for the eval report and the retry logs.
-            var matchScores: [String: (distance: Float, type: PhotoType, score: Float?)] = [:]
+            var matchScores: [String: (distance: Float, type: PhotoType, score: Float?, breakdown: [String: Any]?)] = [:]
             // Every distance scored this run, match or not — the gap rule reads
             // the whole distribution once the scan is over. See `gapCutEnabled`.
             var scoredDistances: [Float] = []
@@ -1459,6 +1479,68 @@ extension ViewController {
             let memoryAtStart = Self.residentMB()
             var memoryPeak = memoryAtStart
             FaceRecognizer.timing = { stage, ms in self?.stageMs[stage, default: 0] += ms }
+
+            // The store — see `ScanStore`. `remember` writes a photo's verdict once
+            // examined; `decideFromStore` counts a photo the store already knows
+            // without loading it, and says so. Candidates are compared with the
+            // selfie here, and only a possible match goes on to be loaded.
+            var storeDecided = 0
+            var storeCloudSkipped = 0
+            // The widest cut-off any type gets: under it the real rules might
+            // still match the photo, so it is examined in full.
+            let storeCutoff = max(Self.matchThreshold, Self.selfieMatchThreshold, Self.profileMatchThreshold)
+            func remember(_ asset: PHAsset, _ verdict: ScanStore.Verdict, note: String? = nil) {
+                guard let store else { return }
+                if verdict == .candidate {
+                    guard let faces = self?.lastEmbeddings, !faces.isEmpty else { return }
+                    store.remember(asset, .candidate, faces: faces)
+                } else {
+                    store.remember(asset, verdict, note: note)
+                }
+            }
+            func decideFromStore(_ asset: PHAsset, n: Int) -> Bool {
+                guard let store, let record = store.record(for: asset) else { return false }
+                func decided(_ gate: EvalGate, _ line: String) -> Bool {
+                    storeDecided += 1
+                    eval.note(asset, image: nil, gate: gate, fromStore: true)
+                    if Self.verboseLogging { print("  \u{1f4be} [\(n)] \(line) — from the last scan") }
+                    return true
+                }
+                switch record.verdict {
+                case .noFace: noFace += 1; return decided(.noFace, "no face")
+                case .group: groupSkipped += 1; return decided(.group, "group")
+                case .faceTooSmall: tooSmall += 1; return decided(.faceTooSmall, "face too small")
+                case .otherPeople: otherPeople += 1; return decided(.otherPeople, "someone else in the photo")
+                case .notFullBody: notFullBody += 1; return decided(.notFullBody, "not head to toe")
+                case .unusableFace: unusableFace += 1; return decided(.unusableFace, "unusable face")
+                case .tooLarge: tooLargeSkipped += 1; return decided(.tooLarge, "original over the cap")
+                case .sensitive: sensitiveSkipped += 1; return decided(.sensitive, "sensitive content")
+                case .cloudThumbnail, .cloudSmallCopy:
+                    // Only while the photo still has no copy on the phone: decided
+                    // in the iCloud branch, once the load has failed.
+                    return false
+                case .candidate:
+                    guard let reference = self?.referenceEmbedding else { return false }
+                    let distances = store.distances(record, to: reference, extra: self?.extraReferenceEmbeddings ?? [],
+                                                    allFrames: Self.matchAgainstAllFrames)
+                    guard let best = distances.min() else { return false }
+                    // Several faces: every one must be the shopper, as in `matchPerson`.
+                    if distances.count > 1, distances.contains(where: { $0 >= Self.matchThreshold }) {
+                        groupSkipped += 1
+                        return decided(.group, "group (\(distances.count) faces, d=\(String(format: "%.3f", best)))")
+                    }
+                    guard best >= storeCutoff else { return false }
+                    noMatch += 1
+                    scoredDistances.append(best)
+                    if let closest = closestNoMatch, closest <= best {} else { closestNoMatch = best }
+                    if best - Self.matchThreshold <= 0.1 { nearMisses += 1 }
+                    storeDecided += 1
+                    eval.note(asset, image: nil, gate: .noMatch, distance: best, fromStore: true)
+                    if Self.verboseLogging { print("  \u{1f4be} [\(n)] no match  d=\(String(format: "%.3f", best)) — from the last scan's face vector") }
+                    return true
+                }
+            }
+
             func examine(_ asset: PHAsset, _ image: UIImage, n: Int) {
                     // Read before anything else loads: the photo is already upright.
                     let wasRotated = self?.lastLoadRotated ?? false
@@ -1487,26 +1569,39 @@ extension ViewController {
                     case .noFace:
                         noFace += 1
                         eval.note(asset, image: image, rotated: wasRotated, gate: .noFace)
+                        remember(asset, .noFace)
                         if Self.verboseLogging { print("  ○  [\(n)] no face             \(px) \(orient)") }
 
                     case .group(let faceCount):
                         groupSkipped += 1
                         eval.note(asset, image: image, rotated: wasRotated, gate: .group)
+                        // Four or more faces, or a face that could not be embedded,
+                        // is a group whoever the shopper is; two or three faces are
+                        // a group only against this selfie, so their vectors are kept.
+                        remember(asset, faceCount > Self.sameShopperFacesMax || (self?.lastEmbeddings.isEmpty ?? true) ? .group : .candidate)
                         if Self.verboseLogging { print("  \u{1f465} [\(n)] group (\(faceCount) faces) — skipped   \(px) \(orient)") }
 
                     case .faceTooSmall(let pixels):
                         tooSmall += 1
                         eval.note(asset, image: image, rotated: wasRotated, gate: .faceTooSmall, metrics: metrics)
+                        remember(asset, .faceTooSmall)
                         if Self.verboseLogging { print("  \u{1f50e} [\(n)] face too small (\(pixels)px)   \(px) \(orient)") }
 
                     case .otherPeople(let body):
                         otherPeople += 1
                         eval.note(asset, image: image, rotated: wasRotated, gate: .otherPeople, body: body, metrics: metrics)
+                        // One face: someone else is in the photo whoever the shopper
+                        // is. Several faces all the shopper's: only against this selfie.
+                        remember(asset, (self?.lastShopperFaces ?? 1) == 1 ? .otherPeople : .candidate)
                         if Self.verboseLogging { print("  \u{1f465} [\(n)] \(body.people) people — skipped   \(px) \(orient)") }
 
                     case .notFullBody(let body):
                         notFullBody += 1
                         eval.note(asset, image: image, rotated: wasRotated, gate: .notFullBody, body: body, metrics: metrics)
+                        // Final once the larger render was tried, or when nothing
+                        // could trigger that retry. Otherwise a match by a later
+                        // selfie could still rescue it, so the vectors are kept.
+                        remember(asset, self?.lastBodyRetry != nil || !body.headSeen || body.lowerJoints < 1 ? .notFullBody : .candidate)
                         if Self.verboseLogging { print("  \u{1f9cd} [\(n)] not head to toe (head \(body.headSeen), ankles \(body.ankles), span \(String(format: "%.2f", body.span)), feet room \(String(format: "%.3f", body.footRoom)); knees \(body.knees), knee span \(String(format: "%.2f", body.kneeSpan)), knee drop \(body.kneeDrop.map { String(format: "%.2f", $0) } ?? "–"))   \(px) \(orient)") }
 
                     case .scored(let distances, let facePixels, let body, let type, let profile, let museScore):
@@ -1516,6 +1611,10 @@ extension ViewController {
                             .map { String(format: "%.3f", $0) }
                             .joined(separator: " ")
                         let distance = distances.min()!
+                        // Its vectors, whatever happens next: match or not, the
+                        // next selfie decides afresh. The branches below that are
+                        // final for the photo itself overwrite this.
+                        remember(asset, .candidate)
                         // The gap rule sees clean faces only: covered or strained faces
                         // land between the shopper's photos and strangers.
                         let unusable = Self.unusableFaceDrops ? museScore?.filter : nil
@@ -1538,6 +1637,7 @@ extension ViewController {
                             if Self.verboseLogging { print("  ·  [\(n)] no match  d=\(String(format: "%.3f", distance)) cut=\(String(format: "%.2f", cutoff))  \(px) \(orient)  face=\(facePixels)px joints=\(body.lowerJoints)  [\(scores)]") }
                         } else if self?.isSensitiveContent(image) == true {
                             sensitiveSkipped += 1
+                            remember(asset, .sensitive)
                             eval.note(asset, image: image, rotated: wasRotated, gate: .sensitive, distance: distance,
                                       type: type, body: body, metrics: metrics,
                                       fullRes: self?.lastCropFullRes)
@@ -1546,6 +1646,7 @@ extension ViewController {
                             // Before sizing: nothing is fetched for a photo that
                             // will not be shown.
                             unusableFace += 1
+                            remember(asset, .unusableFace)
                             eval.note(asset, image: image, rotated: wasRotated, gate: .unusableFace, distance: distance,
                                       type: type, body: body, metrics: metrics,
                                       fullRes: self?.lastCropFullRes, score: museScore)
@@ -1565,6 +1666,7 @@ extension ViewController {
                             case .tooLarge(let downloaded):
                                 if downloaded { downloadedToSize += 1 }
                                 tooLargeSkipped += 1
+                                remember(asset, .tooLarge)
                                 return (.tooLarge, "original over \(Original.byteCap / 1_048_576)MB")
                             case .unavailable(let reason):
                                 downloadedToSize += 1
@@ -1587,7 +1689,7 @@ extension ViewController {
                             if Self.verboseLogging { print("  \u{1f4cf} [\(n)] hidden — \(hidden.why)  d=\(String(format: "%.3f", distance)) type=\(type.rawValue)  \(px) \(orient)") }
                         } else {
                             matchedIds.append(asset.localIdentifier)
-                            matchScores[asset.localIdentifier] = (distance, type, museScore?.value)
+                            matchScores[asset.localIdentifier] = (distance, type, museScore?.value, museScore?.breakdown)
                             if museScore?.tilted == true { tiltedMatches += 1 }
                             var dupGroup = asset.localIdentifier
                             if let fingerprint = Self.featurePrint(of: image) {
@@ -1641,7 +1743,10 @@ extension ViewController {
                                                                    "done": n,
                                                                    "total": total]
                                 // Higher is better. The page pre-selects the top of each type by it.
-                                if let museScore { matchPayload["score"] = museScore.value }
+                                if let museScore {
+                                    matchPayload["score"] = museScore.value
+                                    matchPayload.merge(museScore.breakdown) { _, new in new }
+                                }
                                 DispatchQueue.main.async {
                                     self?.sendToWeb(["type": "onGalleryMatchFound", "payload": matchPayload])
                                 }
@@ -1675,6 +1780,21 @@ extension ViewController {
                         return
                     }
 
+                    // Known from an earlier scan — see `ScanStore`: counted without
+                    // a load. A decode already started for it finishes unused.
+                    if decideFromStore(asset, n: n) {
+                        ahead = nil
+                        // The page's progress still moves while known photos fly by.
+                        if Date().timeIntervalSince(lastReport) > 0.25 || n == total {
+                            lastReport = Date()
+                            DispatchQueue.main.async {
+                                self?.sendToWeb(["type": "onGalleryScanProgress",
+                                                 "payload": ["done": n, "total": total]])
+                            }
+                        }
+                        return
+                    }
+
                     // The photo decoded ahead of time, if `decodeAhead` started it
                     // during the previous photo; else loaded now. Either way the next
                     // one starts decoding before this one is examined.
@@ -1688,7 +1808,10 @@ extension ViewController {
                     ahead = nil
                     if Self.decodeAhead, index + 1 < total {
                         let nextAsset = assets[index + 1]
-                        if Self.shapeReject(nextAsset) == nil {
+                        // No decode for a photo the store will most likely decide
+                        // without one; a candidate that turns out to match loads then.
+                        let known = store?.record(for: nextAsset).map { $0.verdict != .cloudThumbnail && $0.verdict != .cloudSmallCopy } ?? false
+                        if Self.shapeReject(nextAsset) == nil, !known {
                             let group = DispatchGroup(), box = LoadBox()
                             group.enter()
                             prefetchQueue.async { box.result = self?.loadPhotoResult(asset: nextAsset); group.leave() }
@@ -1700,6 +1823,16 @@ extension ViewController {
                     guard let image = loaded?.image else {
                         let note = self?.lastLoadNote ?? ""
                         if note.hasPrefix("in iCloud") { cloudOnly += 1 }
+                        // Judged on its thumbnail or small copy by an earlier scan and
+                        // still only in iCloud — see `ScanStore`: no test, no download.
+                        if let store, let record = store.record(for: asset),
+                           record.verdict == .cloudThumbnail || record.verdict == .cloudSmallCopy {
+                            storeCloudSkipped += 1
+                            noImage += 1
+                            eval.note(asset, image: nil, gate: .noImage, fromStore: true)
+                            if Self.verboseLogging { print("  \u{1f4be} [\(n)] in iCloud — \(record.verdict == .cloudSmallCopy ? "small copy: \(record.note ?? "dropped")" : "not a candidate") in an earlier scan, skipped") }
+                            return
+                        }
                         // A thumbnail shaped like a selfie or a lone standing person is worth a
                         // download, started now within the caps and the ceiling. Anything else is skipped.
                         if let thumb = self?.lastLoadThumbnail,
@@ -1717,7 +1850,7 @@ extension ViewController {
                                 cloudQueue.addOperation {
                                     let began = Date()
                                     // Small copy first; the full one only for a lone person.
-                                    let preview = self?.loadFromCloudResult(asset: asset, pixels: Self.cloudPreviewPixels, timeout: Self.cloudTimeout)
+                                    let preview = self?.loadFromCloudResult(asset: asset, pixels: Self.cloudPreviewPixels, timeout: Self.cloudTimeoutNow)
                                     let check: (passes: Bool, note: String, faceRatio: CGFloat)? = preview?.image.map { self?.cloudPreviewPasses($0, kind: kind) ?? (passes: false, note: "", faceRatio: 0) }
                                     if let check, check.passes {
                                         cloudFullInFlight.add(1)
@@ -1731,7 +1864,7 @@ extension ViewController {
                                         } else if Self.verboseLogging {
                                             print("  ☁️  [\(n)] \(kind) — small copy face \(Int(check.faceRatio * pixels))px at \(Int(pixels)): fetching \(Int(pixels))px")
                                         }
-                                        var full = self?.loadFromCloudResult(asset: asset, pixels: pixels, timeout: Self.cloudTimeout)
+                                        var full = self?.loadFromCloudResult(asset: asset, pixels: pixels, timeout: Self.cloudTimeoutNow)
                                         // Held as JPEG until the scan reads it: a decoded 1536px image is
                                         // about 7MB, and dozens may wait for the local pass to end.
                                         job.data = full?.image?.jpegData(compressionQuality: 0.92)
@@ -1756,6 +1889,9 @@ extension ViewController {
                             }
                             return
                         }
+                        // A thumbnail that failed the shape test fails it next time
+                        // too; a photo with no thumbnail at all is tried again.
+                        if note.hasPrefix("in iCloud"), self?.lastLoadThumbnail != nil { remember(asset, .cloudThumbnail) }
                         noImage += 1
                         eval.note(asset, image: nil, gate: .noImage)
                         if Self.verboseLogging { print("  ⃠  [\(n)] no local image — \(note)") }
@@ -1763,6 +1899,7 @@ extension ViewController {
                     }
                     examine(asset, image, n: n)
                     if n % 25 == 0 { memoryPeak = max(memoryPeak, Self.residentMB()) }
+                    store?.saveIfDue()
 
                     // Throttled by time, not photo count: per-photo cost varies too
                     // much for "every Nth" to give a predictable update rate.
@@ -1828,6 +1965,7 @@ extension ViewController {
                 cloudSeconds += job.seconds
                 if job.previewRejected {
                     cloudPreviewOut += 1
+                    remember(job.asset, .cloudSmallCopy, note: job.previewNote)
                     if Self.verboseLogging { print("  ☁️  [\(job.n)] \(job.kind) — small copy: \(job.previewNote), full download skipped") }
                     continue
                 }
@@ -1856,6 +1994,10 @@ extension ViewController {
                     }
                 }
             }
+
+            // Not for a scan another one has replaced: its records are already
+            // in the newer store, and two writers on one file help nobody.
+            if self?.scanGeneration == generation { store?.save() }
 
             let cloudWaited = Date().timeIntervalSince(cloudPassStarted)
             let elapsed = Date().timeIntervalSince(startedAt)
@@ -1936,6 +2078,7 @@ extension ViewController {
                 no original \(noOriginal)   (original unreadable or not downloaded in time; \(sizedByPixels) too slow to size but shown on pixel count)
                 low data    \(lowDataSkipped)   (only in iCloud, not downloaded — Low Data Mode is on)
                 sized       \(sized) original(s), \(downloadedToSize) from iCloud, \(String(format: "%.1f", sizingSeconds))s
+                store       \(store == nil ? "off" : "\(storeDecided) decided without loading, \(storeCloudSkipped) iCloud skipped, \(store?.written ?? 0) written, \(store?.count ?? 0) remembered")
                 duplicates  \(duplicates)   (matches that repeat an earlier one; shown, but only one of each is pre-selected)
                 MATCHED     \(matchedIds.count)   (selfie \(found[.selfie, default: 0]), front \(found[.front, default: 0]), side \(found[.side, default: 0]); \(kneeLength) in on the knee rule)
                 elapsed     \(String(format: "%.1f", elapsed))s  (\(String(format: "%.0f", rate))/s)
@@ -2016,6 +2159,14 @@ extension ViewController {
                 if !cloudFailures.isEmpty { summary["cloudFailures"] = cloudFailures }
                 summary["cloudLeft"] = cloudLeft
                 summary["cloudWaitMs"] = Int(cloudWaited * 1000)
+                // The store — see `ScanStore`: photos counted without a load,
+                // iCloud candidates skipped, records written, records held.
+                if let store {
+                    summary["storeDecided"] = storeDecided
+                    summary["storeCloudSkipped"] = storeCloudSkipped
+                    summary["storeWritten"] = store.written
+                    summary["storeRecords"] = store.count
+                }
                 summary["cloudFirstDownloadedDate"] = cloudFirstDownloaded?.day
                 summary["cloudFirstDownloadedAtMs"] = cloudFirstDownloaded?.atMs
                 summary["cloudLastDownloadedDate"] = cloudLastDownloaded?.day
@@ -2035,6 +2186,7 @@ extension ViewController {
                                                       "done": total,
                                                       "total": total]
                     if let value = score.score { heldPayload["score"] = value }
+                    if let breakdown = score.breakdown { heldPayload.merge(breakdown) { _, new in new } }
                     self?.sendToWeb(["type": "onGalleryMatchFound", "payload": heldPayload])
                 }
 
@@ -2469,6 +2621,27 @@ struct MuseScore {
         return String(format: "score=%.2f [%@]%@", value, detail, extras.isEmpty ? "" : "  " + extras)
     }
 
+    /// For the page's analytics, sent with the match next to `score`: each part,
+    /// the penalties applied, and the filter that zeroed it, if one did — so a
+    /// ranking can be explained without the console.
+    var breakdown: [String: Any] {
+        var penalties: [String] = []
+        if capped { penalties.append("cap") }
+        if tilted { penalties.append("tilted") }
+        if smile == .closed { penalties.append("closed smile") }
+        if smile == .open { penalties.append("open smile") }
+        if wideEyed { penalties.append("wide-eyed") }
+        penalties += lowered
+        if dressy { penalties.append("dressy") }
+        if busy { penalties.append("busy") }
+        var fields: [String: Any] = [
+            "scoreParts": Dictionary(parts.map { ($0.name, (Double($0.value) * 100).rounded() / 100) }) { _, last in last },
+            "scorePenalties": penalties,
+        ]
+        if let filter { fields["scoreFilter"] = filter }
+        return fields
+    }
+
     /// The head crop for the expression reader and classifier: the face box with hair
     /// and cap brim inside it. Normalised, bottom-left origin, clipped to the image.
     static func headBox(_ face: CGRect) -> CGRect {
@@ -2556,6 +2729,8 @@ struct EvalRecord {
     let originalBytes: Int?
     /// How well the photo would serve the Muse — matches only. See `MuseScore`.
     let score: MuseScore?
+    /// Decided from an earlier scan's record, without loading the photo. See `ScanStore`.
+    let fromStore: Bool
 }
 
 /// Scores one scan against the answer-key album. A value, not a class, so the
@@ -2589,7 +2764,8 @@ struct ScanEval {
     mutating func note(_ asset: PHAsset, image: UIImage?, rotated: Bool = false, gate: EvalGate,
                        distance: Float? = nil, type: PhotoType? = nil,
                        body: BodyCheck? = nil, metrics: FaceMetrics? = nil,
-                       fullRes: Bool? = nil, originalBytes: Int? = nil, score: MuseScore? = nil) {
+                       fullRes: Bool? = nil, originalBytes: Int? = nil, score: MuseScore? = nil,
+                       fromStore: Bool = false) {
         guard let labels else { return }
         records.append(EvalRecord(
             id: asset.localIdentifier,
@@ -2606,7 +2782,8 @@ struct ScanEval {
             originalSize: "\(asset.pixelWidth)x\(asset.pixelHeight)",
             renderWidth: image?.cgImage?.width,
             originalBytes: originalBytes,
-            score: score
+            score: score,
+            fromStore: fromStore
         ))
     }
 
@@ -2619,7 +2796,8 @@ struct ScanEval {
             return EvalRecord(id: r.id, gate: gate, distance: r.distance, type: r.type, body: r.body,
                               metrics: r.metrics, fullRes: r.fullRes, rotated: r.rotated, screenshot: r.screenshot,
                               labelled: r.labelled, taken: r.taken, originalSize: r.originalSize,
-                              renderWidth: r.renderWidth, originalBytes: r.originalBytes, score: r.score)
+                              renderWidth: r.renderWidth, originalBytes: r.originalBytes, score: r.score,
+                              fromStore: r.fromStore)
         }
     }
 
@@ -2764,7 +2942,7 @@ struct ScanEval {
         let name = "swan-eval-\(stamp.string(from: Date())).csv"
 
         let number = { (value: Double?) in value.map { String(format: "%.4f", $0) } ?? "" }
-        var lines = ["id,gate,labelled,gridRank,distance,type,joints,ankles,headSeen,span,footRoom,people,shoulders,hips,headSays,faceRatio,yaw,pitch,quality,rotated,screenshot,fullRes,taken,original,renderWidth,originalKB,score,sQuality,sPose,sLight,sSize,sMouth,sEyes,sBrow,sSharp,sFilter,exprSmile,exprJaw,exprBlinkL,exprBlinkR,exprBrow,exprSquint,exprWide,exprTeeth,exprGazeUp,exprGazeDown,exprGazeSide,sunglasses,hat,handOnFace,capped,tilted,smile,wideEyed,lowered,dressy,busy,outfitLabel"]
+        var lines = ["id,gate,labelled,gridRank,distance,type,joints,ankles,headSeen,span,footRoom,people,shoulders,hips,headSays,faceRatio,yaw,pitch,quality,rotated,screenshot,fullRes,taken,original,renderWidth,originalKB,score,sQuality,sPose,sLight,sSize,sMouth,sEyes,sBrow,sSharp,sFilter,exprSmile,exprJaw,exprBlinkL,exprBlinkR,exprBrow,exprSquint,exprWide,exprTeeth,exprGazeUp,exprGazeDown,exprGazeSide,sunglasses,hat,handOnFace,capped,tilted,smile,wideEyed,lowered,dressy,busy,outfitLabel,fromStore"]
         for record in records {
             // Typed, and in three parts: one literal this long is more than Swift's
             // type-checker will solve in reasonable time.
@@ -2834,6 +3012,7 @@ struct ScanEval {
                 record.score.map { String($0.tilted) } ?? "", record.score?.smile.rawValue ?? "", record.score.map { String($0.wideEyed) } ?? "", record.score?.lowered.joined(separator: " ") ?? "",
                 number(record.score.map { Double($0.outfit.dressy) }), number(record.score.map { Double($0.outfit.busy) }),
                 record.score?.outfit.label ?? "",
+                String(record.fromStore),
             ]
             let scoreFields: [String] = [number(record.score.map { Double($0.value) })] + scoreParts
                 + [record.score?.filter ?? ""] + exprFields + flagFields
@@ -4124,6 +4303,7 @@ extension ViewController {
         // face, a group — must not carry the previous photo's retry into the log.
         lastBodyRetry = nil
         lastEarlyNoMatch = false
+        lastEmbeddings = []
         guard let reference = referenceEmbedding, let recognizer = Self.faceRecognizer,
               let cgImage = image.cgImage else { return .noFace }
 
@@ -4150,11 +4330,24 @@ extension ViewController {
         lastShopperFaces = 1
         if Self.requireSingleFace && faces.count > 1 {
             guard faces.count <= Self.sameShopperFacesMax else { return .group(faceCount: faces.count) }
+            // With a store, every face's vector is wanted whatever the verdict,
+            // so the next scan can judge the group against a new selfie without
+            // loading the photo; without one the first miss ends the loop.
+            var vectors: [[Float]] = []
+            var allMatch = true
             for face in faces {
-                guard let candidate = timed("group", { recognizer.embedding(in: cgImage, near: face.boundingBox, seed: face) }),
-                      FaceRecognizer.distance(reference, candidate) < Self.matchThreshold
-                else { return .group(faceCount: faces.count) }
+                guard let candidate = timed("group", { recognizer.embedding(in: cgImage, near: face.boundingBox, seed: face) }) else {
+                    allMatch = false
+                    break
+                }
+                vectors.append(candidate)
+                if FaceRecognizer.distance(reference, candidate) >= Self.matchThreshold {
+                    allMatch = false
+                    if scanStore == nil { break }
+                }
             }
+            lastEmbeddings = vectors.count == faces.count ? vectors : []
+            guard allMatch else { return .group(faceCount: faces.count) }
             lastShopperFaces = faces.count
         }
 
@@ -4186,7 +4379,7 @@ extension ViewController {
                     let ratio = faces.map(\.boundingBox.width).max() ?? 0
                     let needed = min(Self.fullResPixels, max(Self.loadPixels * 1.5, Self.minFacePixels / max(ratio, 0.01) * 1.25))
                     let began = Date()
-                    let fetched = loadFromCloudResult(asset: asset, pixels: needed, timeout: Self.cloudTimeout)
+                    let fetched = loadFromCloudResult(asset: asset, pixels: needed, timeout: Self.cloudTimeoutNow)
                     largerCache = fetched.image?.cgImage.flatMap { $0.width > cgImage.width ? $0 : nil }
                     if largerCache != nil { cloudLargerDownloads += 1 }
                     if Self.verboseLogging {
@@ -4226,11 +4419,12 @@ extension ViewController {
             let faceWidth = faces.map { $0.boundingBox.width * CGFloat(source.width) }.max() ?? widest
 
             var distances: [Float] = []
+            var vectors: [[Float]] = []
             for face in faces {
-                // Vision's boxes are normalised, so they fit the larger render unchanged.
                 // Vision's boxes are normalised, so they fit the larger render unchanged.
                 // Seeded with the observation when `source` is the render it was detected on.
                 guard let candidate = recognizer.embedding(in: source, near: face.boundingBox, seed: source === cgImage ? face : nil) else { continue }
+                vectors.append(candidate)
                 var distance = FaceRecognizer.distance(reference, candidate)
 
                 // Under `matchAgainstAllFrames` the score is the second-smallest
@@ -4250,6 +4444,9 @@ extension ViewController {
                                    name: String(format: "%02d-d%.3f", debugCropsSaved, distance))
                 }
             }
+            // For the store: only a complete set, so a stored group verdict never
+            // rests on a face that was skipped here.
+            lastEmbeddings = vectors.count == faces.count ? vectors : []
             guard !distances.isEmpty else { return nil }
             return (distances, faceWidth)
         }

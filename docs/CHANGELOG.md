@@ -20,6 +20,67 @@ onwards; those entries are kept for reference and need nothing on your side.
 
 ---
 
+## [1.3.5] — 2026-10-28
+
+**Mobile iOS only.** The npm package is unchanged. **Controller: update
+recommended.** Older controllers keep working; without the update, a second
+scan takes as long as the first, iCloud downloads on mobile data keep the 20 s
+limit, and the score breakdown is left out.
+
+```
+https://swan-mobile-web-component.swan.so/v1.3.5/index.html
+```
+
+### Added
+
+- **Scan results kept between scans.** The controller now remembers, on the
+  phone, what it learned about each photo: a verdict that does not depend on
+  the selfie (no face, a group, face too small, not head to toe, and so on)
+  or, for a photo that could match somebody, the face vectors of its faces.
+  The next scan for the same account counts the known photos without loading
+  them and compares the new selfie with the stored vectors; only a possible
+  match is loaded and goes through every rule as before, so the result is the
+  same. An iCloud photo is downloaded once in its life, and after that only
+  when it matches. On a 3,533-photo library with 741 photos in iCloud the
+  second scan took 76 s against 201 s, 58 s of that waiting for iCloud on
+  mobile data; on a 123-photo library 8 s against 12 s. A record is dropped
+  when the photo is edited or the rules change. The file (`ScanStore.swift`,
+  new, add it to your target) lives in the app's private Application Support
+  folder under iOS data protection, is excluded from iCloud and computer
+  backups, is never sent anywhere, and is deleted when a different account
+  signs in. `ScanStore.enabled` turns it off. `summary` gains `storeDecided`,
+  `storeCloudSkipped`, `storeWritten` and `storeRecords`; absent when the
+  store is off. The console summary gains a `store` line.
+
+- **Ranking in the selection events.** `photo_selected` and
+  `photo_deselected` gain `type`, `distance`, `score` and `rank` (place in the
+  grid, 1 is the first tile); `photo_deselected` also gains `auto`.
+  `selection_confirmed` gains `photos`, one entry per chosen photo with the same
+  fields and `auto` (chosen by the flow, not tapped). No asset ids. A field is
+  left out when the controller did not send it.
+
+- **Why a photo scored what it did.** `onGalleryMatchFound` gains
+  `scoreParts` (each signal 0–1: `quality`, `pose`, `light`, `size`, `mouth`,
+  `eyes`, `brow`, `sharp`), `scorePenalties` (what pulled the score down, for
+  example `["closed smile", "cap"]`) and `scoreFilter` (what set it to 0, for
+  example `sunglasses`). The page adds them to the same selection events, so
+  two photos' rankings can be compared in PostHog.
+
+- **Score badge on the grid.** Each tile shows the host's `score` (0–1, two
+  decimals) in its bottom-left corner, the number that sets the grid's order
+  and the pre-selection, so the ranking can be reviewed on the phone. Behind
+  `SHOW_SCORE_BADGE` in `galleryConstants.ts`, on in this release; it is
+  compiled into the page, so removing it is a release with the switch off.
+  Tiles from hosts that send no score show nothing.
+
+### Changed
+
+- **Each iCloud download gets 30 s on mobile data** (20 s on Wi-Fi, as
+  before): a 0.5 MB copy measured 8 to 17 s on mobile data and a matched photo
+  was lost at 20 s. Sizing an original keeps its 20 s.
+
+---
+
 ## [1.3.4] — 2026-10-27
 
 **Mobile iOS only.** The npm package is unchanged. **Controller: update

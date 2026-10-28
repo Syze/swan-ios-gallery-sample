@@ -1,4 +1,4 @@
-# Gallery Pick — iOS controller notes for 1.3.4
+# Gallery Pick — iOS controller notes for 1.3.5
 
 What the native code does on the phone, what it is built from, how each part
 is licensed, and what leaves the device. Companion to `CHANGELOG.md` and
@@ -14,6 +14,7 @@ All of them are in `native-samples/`. The Podfile names the sample target
 | `ViewController.swift` | Hosts the web page, scans the photo library, matches faces, scores and filters photos, uploads the selected ones. |
 | `FaceRecognition.swift` | Runs the face recognition model and compares faces. |
 | `FaceExpression.swift` | Reads facial expression (smile, blink, brows, eyes) from a face crop. |
+| `ScanStore.swift` | Keeps what the scan learned about each photo between scans, on the phone only. |
 | `FaceModels/FaceRecognitionSFace.mlpackage` | The face recognition model, 9.3 MB, Core ML format. |
 | `FaceModels/face_landmarker.task` | The expression model, 3.7 MB. |
 | `PrivacyInfo.xcprivacy` | Apple's privacy manifest, listing the system APIs the code calls and why. |
@@ -48,7 +49,8 @@ Every step of finding and filtering photos is on the device:
    copy when the face would otherwise be too small to compare. These are Apple
    Photos downloads of the user's own photos, on Wi-Fi or mobile data, Low
    Data Mode included, up to 200 on Wi-Fi and 100 on mobile data per scan, six
-   at a time on Wi-Fi and three on mobile data. The scan waits 30 seconds after
+   at a time on Wi-Fi and three on mobile data, each given 20 seconds on Wi-Fi
+   and 30 on mobile data. The scan waits 30 seconds after
    the local pass for
    downloads still in progress, and up to 90 seconds while a photo the small
    copy confirmed is still coming down (a library that is all in iCloud has
@@ -72,6 +74,22 @@ score is sent anywhere during steps 1 to 5. The iCloud downloads in step 1 go
 from Apple's servers to the phone through the Photos framework; Swan is not
 involved in them.
 
+Between scans the controller keeps one record per photo it has judged, in the
+app's private Application Support folder: either a verdict that does not
+depend on the selfie (no face, a group, face too small, not head to toe, only
+in iCloud and not worth a download, and so on) or, for a photo that could
+match somebody, the face vectors of its faces (128 numbers per face, up to
+three faces). The next scan for the same account counts the known photos
+without loading them and compares the new selfie with the stored vectors;
+only a possible match is loaded and goes through steps 2 to 4 in full, so
+every rule that decides a match runs on the real photo. An iCloud photo is
+therefore downloaded once in its life, and after that only when it matches.
+A record is dropped when the photo is edited or when the rules change. The
+file is under iOS data protection, excluded from iCloud and computer backups,
+never sent anywhere, and deleted when a different account signs in. About
+0.6 KB per photo. `ScanStore.enabled` in `ScanStore.swift` turns it off, and
+the scan is then exactly what it was.
+
 ## What leaves the phone, and when
 
 Only when the user taps Build, and only to Swan's servers:
@@ -89,7 +107,9 @@ photo identifiers.
 
 Never sent: face embeddings, expression readings, the library scan results
 for photos the user did not select, or anything from photos that were
-dropped. These exist only in memory during the scan.
+dropped. Verdicts and face embeddings stay on the phone between scans, in the
+app's private folder described above; everything else exists only in memory
+during the scan.
 
 ## Debug switches, all off in the shared build
 
@@ -106,7 +126,12 @@ Measured on an A16 iPhone over a library of 2,147 photos, 453 of them only in
 iCloud: 88 to 102 seconds, 21 to 24 photos a second, with the expression model
 adding 10 to 25 ms per matched photo. Peak memory for the app's own process was
 230 to 295 MB; the web view runs in its own process. An iPhone 12 over 89
-photos: 10 seconds, peak 244 MB. Each photo is released after its checks;
+photos: 10 seconds, peak 244 MB. With the results kept from an earlier scan,
+a second scan of a 3,533-photo library (741 only in iCloud) took 76 seconds
+against 201 for the first, 58 of them waiting for iCloud on mobile data; the
+local pass itself was about 18 seconds, with face detection and embedding
+under a second, and peak memory 244 MB against 280. The iPhone 12 over 123
+photos: 8 seconds against 12. Each photo is released after its checks;
 iCloud downloads are held compressed, about 1 MB each, until read. The two models add 13 MB to
 the app; the MediaPipe frameworks added about 40 MB to a debug build, less
 in a release build.

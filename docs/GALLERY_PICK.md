@@ -556,7 +556,7 @@ iOS for more library photos has to keep it.
 | Message | Payload |
 |---|---|
 | `RENDER_COMPONENT` | `{ componentName: "GalleryPick", props: { … } }` — see [Rendering the component](#rendering-the-component) |
-| `onGalleryMatchFound` | `{ assetId, type, isFullBody, distance?, score?, dupGroup?, done, total }` — `distance` is the host's match distance, lower is closer; `score` is the host's ranking of the photo for the Muse, higher is better, with clean faces at 0.5 and above and demoted ones below; `dupGroup` is shared by photos that repeat one shot. The picker pre-selects the top-ranked photo of each type, one per `dupGroup`: by `score` when sent, else the closest by `distance`, else the newest. |
+| `onGalleryMatchFound` | `{ assetId, type, isFullBody, distance?, score?, scoreParts?, scorePenalties?, scoreFilter?, dupGroup?, done, total }` — `distance` is the host's match distance, lower is closer; `score` is the host's ranking of the photo for the Muse, higher is better, with clean faces at 0.5 and above and demoted ones below; `dupGroup` is shared by photos that repeat one shot. The picker pre-selects the top-ranked photo of each type, one per `dupGroup`: by `score` when sent, else the closest by `distance`, else the newest. Analytics only, sent with `score`: `scoreParts` is each signal 0–1 (`quality`, `pose`, `light`, `size`, `mouth`, `eyes`, `brow`, `sharp`), `scorePenalties` lists what pulled the score down (`cap`, `tilted`, `closed smile`, `open smile`, `wide-eyed`, `mouth open`, `exposure`, `dressy`, `busy`; empty when none), and `scoreFilter` is what set it to 0 (for example `sunglasses`). The page adds them to the selection events. |
 | `onGalleryScanProgress` | `{ done, total }` |
 | `onGalleryScanComplete` | `{ assetIds, dropped?, limited?, denied?, error?, skipped?, summary? }` — `dropped` names matches the host withdrew once the whole pass was scored; the page removes those tiles if it ever showed them. A host holds borderline matches back rather than streaming them, so in practice `assetIds` only adds tiles, appended after the streamed ones, and `dropped` names ids the page never saw. Absent from hosts that predate it. `skipped` is `{ inCloud, cloudSelfies, cloudFullLength, cloudDownloaded, cloudLeft, noImage }`, counts of what the scan could not look at (photos only in iCloud, how many of those looked like a selfie or a full-length photo from their thumbnail, how many were downloaded in full after a small copy confirmed one person, how many were left by the cap or still downloading when the wait after the local scan ran out). `summary` is the scan's whole tally as numbers: photos examined, each gate's count (no face, group, other people, face too small, not full body, no match, sensitive, unusable face, too large), the matcher's name and cut-off, the closest rejected distance and near misses, matches by type, the selfie frames chosen from, and timings. Counts only, no ids. Both are reported to analytics only; nothing is shown to the user. |
 | `onGalleryPhotoAnalysis` | `{ assetId, type, isFullBody, captured? }` |
@@ -1059,6 +1059,42 @@ Every release has its own address, for example
   reference host logs it.
 - **Each release says whether `ViewController.swift` needs updating.**
 
+### 1.3.5 — 28 October 2026
+
+**Controller:** update recommended. Older controllers keep working; without
+the update, a second scan takes as long as the first, iCloud downloads on
+mobile data keep the 20 s limit, and the score breakdown is not sent. The
+full list is in `CHANGELOG.md`.
+
+**Flow**
+
+- Each grid tile shows the host's score (0–1) in its corner, the number the
+  grid order and the pre-selection follow, so the ranking can be reviewed on
+  the phone. Behind `SHOW_SCORE_BADGE` in `galleryConstants.ts`, on in this
+  release.
+- The controller keeps what it learned about each photo between scans, on the
+  phone only (new file `ScanStore.swift`): a second scan for the same account
+  counts the known photos without loading them, compares the new selfie with
+  the stored face vectors, and loads only a possible match. Same results, a
+  fraction of the time, and an iCloud photo is downloaded once in its life.
+  The file is private to the app, excluded from backups and deleted when
+  another account signs in. Details in `GALLERY_PICK_IOS_CONTROLLER.md`.
+- Each iCloud download is given 30 s on mobile data; 20 s on Wi-Fi as before.
+
+**Setup**
+
+- `summary` gains `storeDecided` (photos counted from an earlier scan without
+  loading), `storeCloudSkipped` (iCloud photos skipped on an earlier verdict),
+  `storeWritten` and `storeRecords` (records written this scan, and held);
+  absent when the store is off.
+- `onGalleryMatchFound` gains `scoreParts`, `scorePenalties` and
+  `scoreFilter`, the breakdown behind `score` (see the message table).
+- `photo_selected` and `photo_deselected` gain `type`, `distance`, `score` and
+  `rank`; `photo_deselected` also `auto`. `selection_confirmed` gains
+  `photos`, one entry per chosen photo with the same fields and `auto`. The
+  score breakdown is added to the same events. A field is left out when the
+  controller did not send it.
+
 ### 1.3.4 — 27 October 2026
 
 **Controller:** update recommended. Older controllers keep working; without
@@ -1074,8 +1110,8 @@ full list is in `CHANGELOG.md`.
   was 25°.
 - iCloud photos are fetched at the scan's own size, a bigger copy only when
   the face would be too small; three downloads at a time on mobile data, six
-  on Wi-Fi. A matched iCloud photo whose original is too slow to size is
-  shown when its pixel count rules out the 10MB cap.
+  on Wi-Fi, each given 20 s. A matched iCloud photo whose original is too
+  slow to size is shown when its pixel count rules out the 10MB cap.
 
 **Setup**
 
