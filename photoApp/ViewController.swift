@@ -1,6 +1,6 @@
 
 
-// Swan Gallery Pick host — pairs with Swan mobile 1.3.5. Release notes and
+// Swan Gallery Pick host — pairs with Swan mobile 1.3.6. Release notes and
 // whether this file needs updating: CHANGELOG.md.
 
 import UIKit
@@ -15,7 +15,7 @@ final class ViewController: UIViewController {
 
     /// Where the SDK bundle is served from. Must be **https** — getUserMedia needs
     /// a secure context, so an http or file:// URL gives no camera.
-    let sdkURL = URL(string: "https://swan-mobile-web-component.swan.so/v1.3.5/index.html")!
+    let sdkURL = URL(string: "https://swan-mobile-web-component.swan.so/v1.3.6/index.html")!
 
     static let bridgeName = "swanBridge"
 

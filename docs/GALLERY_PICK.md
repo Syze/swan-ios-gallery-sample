@@ -556,7 +556,7 @@ iOS for more library photos has to keep it.
 | Message | Payload |
 |---|---|
 | `RENDER_COMPONENT` | `{ componentName: "GalleryPick", props: { … } }` — see [Rendering the component](#rendering-the-component) |
-| `onGalleryMatchFound` | `{ assetId, type, isFullBody, distance?, score?, scoreParts?, scorePenalties?, scoreFilter?, dupGroup?, done, total }` — `distance` is the host's match distance, lower is closer; `score` is the host's ranking of the photo for the Muse, higher is better, with clean faces at 0.5 and above and demoted ones below; `dupGroup` is shared by photos that repeat one shot. The picker pre-selects the top-ranked photo of each type, one per `dupGroup`: by `score` when sent, else the closest by `distance`, else the newest. Analytics only, sent with `score`: `scoreParts` is each signal 0–1 (`quality`, `pose`, `light`, `size`, `mouth`, `eyes`, `brow`, `sharp`), `scorePenalties` lists what pulled the score down (`cap`, `tilted`, `closed smile`, `open smile`, `wide-eyed`, `mouth open`, `exposure`, `dressy`, `busy`; empty when none), and `scoreFilter` is what set it to 0 (for example `sunglasses`). The page adds them to the selection events. |
+| `onGalleryMatchFound` | `{ assetId, type, isFullBody, distance?, score?, scoreParts?, scorePenalties?, scoreFilter?, dupGroup?, done, total }` — `distance` is the host's match distance, lower is closer; `score` is the host's ranking of the photo for the Muse, higher is better, with clean faces at 0.5 and above and demoted ones below; `dupGroup` is shared by photos that repeat one shot. The picker pre-selects the top-ranked photo of each type, one per `dupGroup` unless every photo of a new shot scores under 0.5: by `score` when sent, else the closest by `distance`, else the newest. Analytics only, sent with `score`: `scoreParts` is each signal 0–1 (`quality`, `pose`, `light`, `size`, `mouth`, `eyes`, `brow`, `sharp`), `scorePenalties` lists what pulled the score down (`cap`, `tilted`, `closed smile`, `open smile`, `wide-eyed`, `mouth open`, `exposure`, `dressy`, `busy`; empty when none), and `scoreFilter` is what set it to 0 (for example `sunglasses`). The page adds them to the selection events. |
 | `onGalleryScanProgress` | `{ done, total }` |
 | `onGalleryScanComplete` | `{ assetIds, dropped?, limited?, denied?, error?, skipped?, summary? }` — `dropped` names matches the host withdrew once the whole pass was scored; the page removes those tiles if it ever showed them. A host holds borderline matches back rather than streaming them, so in practice `assetIds` only adds tiles, appended after the streamed ones, and `dropped` names ids the page never saw. Absent from hosts that predate it. `skipped` is `{ inCloud, cloudSelfies, cloudFullLength, cloudDownloaded, cloudLeft, noImage }`, counts of what the scan could not look at (photos only in iCloud, how many of those looked like a selfie or a full-length photo from their thumbnail, how many were downloaded in full after a small copy confirmed one person, how many were left by the cap or still downloading when the wait after the local scan ran out). `summary` is the scan's whole tally as numbers: photos examined, each gate's count (no face, group, other people, face too small, not full body, no match, sensitive, unusable face, too large), the matcher's name and cut-off, the closest rejected distance and near misses, matches by type, the selfie frames chosen from, and timings. Counts only, no ids. Both are reported to analytics only; nothing is shown to the user. |
 | `onGalleryPhotoAnalysis` | `{ assetId, type, isFullBody, captured? }` |
@@ -1058,6 +1058,19 @@ Every release has its own address, for example
 - **The page reports its version** in the `WEB_READY` message (`version`), and the
   reference host logs it.
 - **Each release says whether `ViewController.swift` needs updating.**
+
+### 1.3.6 — 28 October 2026
+
+**Controller:** no update needed. Page fixes only.
+
+**Flow**
+
+- Pre-selection still takes one photo per shot, but when every photo of a new
+  shot for a slot scores under 0.5, the best photo left fills it even if it
+  repeats a shot already picked (`PRESELECT_REPEAT_BELOW`).
+- Fixed: the matches the controller holds back until the end of the scan are
+  now ranked with the rest and considered for the picks. They used to sit at
+  the bottom of the grid unsorted and were never pre-selected.
 
 ### 1.3.5 — 28 October 2026
 

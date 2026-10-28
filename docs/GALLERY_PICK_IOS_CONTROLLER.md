@@ -1,4 +1,4 @@
-# Gallery Pick — iOS controller notes for 1.3.5
+# Gallery Pick — iOS controller notes for 1.3.6
 
 What the native code does on the phone, what it is built from, how each part
 is licensed, and what leaves the device. Companion to `CHANGELOG.md` and

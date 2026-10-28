@@ -20,6 +20,36 @@ onwards; those entries are kept for reference and need nothing on your side.
 
 ---
 
+## [1.3.6] — 2026-10-28
+
+**Mobile iOS only.** The npm package is unchanged. **Controller: no update
+needed.** Page fixes only.
+
+```
+https://swan-mobile-web-component.swan.so/v1.3.6/index.html
+```
+
+### Changed
+
+- **A repeat of a good shot beats a weak photo in the pre-selection.** The
+  picks still take one photo per shot (`dupGroup`), but when every photo of a
+  new shot for a slot scores under 0.5, the best photo left fills it even if
+  it repeats a shot already picked. A scan had picked a 0.09 side view over
+  the 0.70 second frame of the side already picked. `PRESELECT_REPEAT_BELOW`
+  in `galleryConstants.ts`.
+
+### Fixed
+
+- **The last matches of a scan were left unsorted and out of the
+  pre-selection.** The controller streams the matches it held back for the
+  gap rule one moment before the scan-complete message; the page ranked the
+  grid and chose the picks from a copy of the scores that had not yet taken
+  them in. Those photos sat at the bottom of the grid in arrival order, and a
+  better side or front among them was never considered. Present since the
+  ranking at scan end in 1.3.0.
+
+---
+
 ## [1.3.5] — 2026-10-28
 
 **Mobile iOS only.** The npm package is unchanged. **Controller: update
