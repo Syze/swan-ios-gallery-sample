@@ -354,7 +354,7 @@ All optional. Height is always centimetres.
 
 | Callback | Fires when |
 |---|---|
-| `onImageSelect` | One photo selected or deselected in the picker. Fires for the user's taps and for the photos the flow selects itself (the starting selection after a scan, a photo just taken), which carry `auto: true`. |
+| `onImageSelect` | One photo selected or deselected in the picker. Fires for the user's taps and for the photos the flow selects itself (the starting selection after a scan, a photo just taken), which carry `auto: true`. Also carries the photo's `type`, `distance`, `score`, grid `rank` and score breakdown when the controller sent them. |
 | `onLoadMore` | The user asked for more photos than the scan found. |
 | `onUploadStart` | The chosen photos begin uploading. |
 | `onUploadEnd` | One **file** finished uploading — per file, not per set, and for failures too. |
@@ -399,7 +399,7 @@ onMuseEnd({
 > readable.
 
 ```ts
-onImageSelect({ assetId: string, selected: boolean, count: number, email?: string, auto?: true })
+onImageSelect({ assetId: string, selected: boolean, count: number, email?: string, auto?: true, type?, distance?, score?, rank?, scoreParts?, scorePenalties?, scoreFilter?, scoreInputs? })
 onLoadMore({ path: "shared_library" | "older_photos", shown: number, selected: number, email? })
 onUploadStart({ source, photoCount: number, photoIds: [], background?: boolean, heightInCm, gender?, email? })
 onUploadEnd({ source, assetId, kind: "image" | "video", photoId?, uploaded: boolean, error?, original: boolean, background?, email? })
@@ -556,7 +556,7 @@ iOS for more library photos has to keep it.
 | Message | Payload |
 |---|---|
 | `RENDER_COMPONENT` | `{ componentName: "GalleryPick", props: { … } }` — see [Rendering the component](#rendering-the-component) |
-| `onGalleryMatchFound` | `{ assetId, type, isFullBody, distance?, score?, scoreParts?, scorePenalties?, scoreFilter?, dupGroup?, done, total }` — `distance` is the host's match distance, lower is closer; `score` is the host's ranking of the photo for the Muse, higher is better, with clean faces at 0.5 and above and demoted ones below; `dupGroup` is shared by photos that repeat one shot. The picker pre-selects the top-ranked photo of each type, one per `dupGroup` unless every photo of a new shot scores under 0.5: by `score` when sent, else the closest by `distance`, else the newest. Analytics only, sent with `score`: `scoreParts` is each signal 0–1 (`quality`, `pose`, `light`, `size`, `mouth`, `eyes`, `brow`, `sharp`), `scorePenalties` lists what pulled the score down (`cap`, `tilted`, `closed smile`, `open smile`, `wide-eyed`, `mouth open`, `exposure`, `dressy`, `busy`; empty when none), and `scoreFilter` is what set it to 0 (for example `sunglasses`). The page adds them to the selection events. |
+| `onGalleryMatchFound` | `{ assetId, type, isFullBody, kneeUp?, distance?, score?, scoreParts?, scorePenalties?, scoreFilter?, scoreInputs?, dupGroup?, done, total }` — `type` is `selfie`, `front`, `side` or `three-quarter` (a body turned 30° to 45°, which fills a side slot; from hosts with the v2 sort); `kneeUp` is true for a head-to-knee photo, which the picker pre-selects only when no head-to-toe photo is left for the slot (the current controller's knee rule is off, so it sends none); `distance` is the host's match distance, lower is closer; `score` is the host's ranking of the photo for the Muse, higher is better, with clean faces at 0.5 and above and demoted ones below; `dupGroup` is shared by photos that repeat one shot. The picker pre-selects the top-ranked photo of each type, one per `dupGroup` unless every photo of a new shot scores under 0.5: by `score` when sent, else the closest by `distance`, else the newest. Analytics only, sent with `score`: `scoreParts` is each signal 0–1 (`quality`, `pose`, `light`, `size`, `mouth`, `eyes`, `brow`, `sharp`), `scorePenalties` lists what pulled the score down (`cap`, `tilted`, `closed smile`, `open smile`, `wide-eyed`, `mouth open`, `exposure`, `dressy`, `busy`; empty when none), `scoreFilter` is what set it to 0 (`sunglasses`, `hand over face`, `face cut by the frame`, `blurred`, `eyes closed`, `one eye closed`; for a selfie also `head pitched`, `head turned`, `mouth open`, `teeth showing`, `exposure`, `too close`, `no camera data`, `cap or hat`, `hairline covered`, `jaw covered`, `face covered`), and `scoreInputs` is the raw readings the parts were worked out from (`yaw`, `pitch`, `roll` in degrees, `faceWidth` in pixels, `quality`, `brightness`, `clipped`, `backlight`, `blur`, `smile`, `jawOpen`, `blink`, `browUp`, `squint`, `eyeWide`, `teeth`, `sunglasses`, `cap`, `handOnFace`, `dressy`, `busy`; for a selfie also `cameraCm`, `irisPx`, `eyeSpacingPx` in the original's pixels, `focal35` in mm equivalent, `focalAssumed` and `cameraData` as 1 or 0, and `coverHairline`, `coverJaw`, `coverFace` 0–1 when the segmenter read the photo). The page passes them on in `onImageSelect`, and sends the selected photos' details to Swan's analytics (no photo ids, no images). |
 | `onGalleryScanProgress` | `{ done, total }` |
 | `onGalleryScanComplete` | `{ assetIds, dropped?, limited?, denied?, error?, skipped?, summary? }` — `dropped` names matches the host withdrew once the whole pass was scored; the page removes those tiles if it ever showed them. A host holds borderline matches back rather than streaming them, so in practice `assetIds` only adds tiles, appended after the streamed ones, and `dropped` names ids the page never saw. Absent from hosts that predate it. `skipped` is `{ inCloud, cloudSelfies, cloudFullLength, cloudDownloaded, cloudLeft, noImage }`, counts of what the scan could not look at (photos only in iCloud, how many of those looked like a selfie or a full-length photo from their thumbnail, how many were downloaded in full after a small copy confirmed one person, how many were left by the cap or still downloading when the wait after the local scan ran out). `summary` is the scan's whole tally as numbers: photos examined, each gate's count (no face, group, other people, face too small, not full body, no match, sensitive, unusable face, too large), the matcher's name and cut-off, the closest rejected distance and near misses, matches by type, the selfie frames chosen from, and timings. Counts only, no ids. Both are reported to analytics only; nothing is shown to the user. |
 | `onGalleryPhotoAnalysis` | `{ assetId, type, isFullBody, captured? }` |
@@ -1059,6 +1059,45 @@ Every release has its own address, for example
   reference host logs it.
 - **Each release says whether `ViewController.swift` needs updating.**
 
+### 1.3.7 — 29 October 2026
+
+**Controller:** update recommended. Older controllers keep working; without
+the update there are no three-quarter photos, no selfie gates and no cover
+gates. A controller with the new sort needs this page or later. The update
+adds `FaceCover.swift` and a 16.4 MB model file to the app target.
+
+**Flow**
+
+- Photos are sorted the v2 way. A selfie is a face with no knee or ankle in
+  frame and eye spacing of 60 px or more in the original; a knee-up photo is
+  never a selfie. A full-length photo turned 30° to 45° is a three-quarter
+  and fills a side slot; from 45° it is a side.
+- Head-to-knee photos are not shown: only head to toe counts as full length
+  (the controller's `kneeLengthEnabled`, off). The page still pre-selects a
+  `kneeUp` photo last when a controller sends one.
+- Selfies meet the v2 gates. A selfie with the head pitched over 15° or
+  turned over 20°, the mouth open, teeth showing without a smile, a black or
+  blown exposure, the face at the frame's edge, the camera under 25 cm, or
+  no camera data in the original is left out, where it used to rank low or
+  pass. A smile showing teeth still ranks low. A selfie whose eyes are far
+  more closed than the shopper's usual is withdrawn at the end of the scan
+  through `dropped`.
+- Covered faces are left out. A selfie with a cap or hat (which used to rank
+  low), a hood or band over the hairline, a scarf, mask or collar over the
+  jaw, or anything but skin and hair over the face is left out. Eyeglasses
+  are fine.
+
+**Setup**
+
+- `onGalleryMatchFound` and `onGalleryPhotoAnalysis` gain `kneeUp`; `type`
+  gains the value `three-quarter`. `summary` gains `matchedThreeQuarter` and
+  `selfieSmallEyes`.
+- `scoreInputs` gains `cameraCm`, `irisPx`, `eyeSpacingPx`, `focal35`,
+  `focalAssumed` and `cameraData`, and `coverHairline`, `coverJaw` and
+  `coverFace` when the segmenter read the photo; `scoreFilter` gains the new
+  gate names. `summary` gains `unusableGates`, `eyeDropped`, `eyeBaseline`,
+  `coverHints`, `focalAssumed`, `coverRead` and `coverFacts`.
+
 ### 1.3.6 — 28 October 2026
 
 **Controller:** no update needed. Page fixes only.
@@ -1102,11 +1141,8 @@ full list is in `CHANGELOG.md`.
   absent when the store is off.
 - `onGalleryMatchFound` gains `scoreParts`, `scorePenalties` and
   `scoreFilter`, the breakdown behind `score` (see the message table).
-- `photo_selected` and `photo_deselected` gain `type`, `distance`, `score` and
-  `rank`; `photo_deselected` also `auto`. `selection_confirmed` gains
-  `photos`, one entry per chosen photo with the same fields and `auto`. The
-  score breakdown is added to the same events. A field is left out when the
-  controller did not send it.
+- The score details of the photos a user selects are sent to Swan's
+  analytics. No photo ids, no images.
 
 ### 1.3.4 — 27 October 2026
 
@@ -1128,7 +1164,7 @@ full list is in `CHANGELOG.md`.
 
 **Setup**
 
-- `summary`, and `scan_complete` as separate properties, gain
+- `summary` gains
   `cloudFirstDownloadedDate`, `cloudLastDownloadedDate` (capture dates,
   `yyyy-MM-dd`), `cloudFirstDownloadedAtMs`, `cloudLastDownloadedAtMs` (ms from
   the start of the scan), and `matchedFirstDate`, `matchedLastDate` (newest and

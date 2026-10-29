@@ -20,6 +20,122 @@ onwards; those entries are kept for reference and need nothing on your side.
 
 ---
 
+## [1.3.7] — 2026-10-29
+
+**Mobile iOS only.** **Controller: update recommended.** Older controllers
+keep working with this page; without the update, photos are sorted by the
+1.3.x rules (no three-quarter, no knee-up flag) and `scoreInputs` is left
+out. The page must be on this release or later for a controller with the
+new sort: an older page rejects the `three-quarter` type. The update adds
+`FaceCover.swift` and a 16.4 MB model file to the target.
+
+### Added
+
+- **Photos sorted the v2 way (plan item 1).** Behind `typeSortV2` in the
+  controller, on. A selfie is a face with no knee or ankle joint in frame
+  and eye spacing of 60 px or more in the original (`selfieEyeSpacingPixels`,
+  `selfieEyeFloorEnabled`); a knee-up photo is never a selfie, whatever the
+  face size. A full-length photo turned 30° to 45° is a `three-quarter`
+  (`threeQuarterDegrees`), which the page puts in a side slot; from 45° it is
+  a `side` as before. `onGalleryMatchFound` and `onGalleryPhotoAnalysis`
+  gain `kneeUp`, true for a head-to-knee photo, which the page pre-selects
+  only when no head-to-toe photo is left for the slot; with the knee rule
+  off (see Changed) the controller sends it as false. `summary` gains `matchedThreeQuarter` and
+  `selfieSmallEyes`; the console MATCH line shows the eye spacing. The
+  results store's rules version is 2, so the first scan after the update is
+  a full one. Measured on two libraries (123 and 2,875 photos): no selfie
+  under the eye floor, three-quarters at 32° to 44°, sides unchanged.
+
+- **Selfie gates the v2 way (plan item 2, the part that needs no new
+  model).** Behind `selfieGatesV2` in the controller, on. A photo sorted as a
+  selfie is now out (score 0, hidden) where 1.3.x ranked it lower or let it
+  through: head pitched over 15° or turned over 20°, mouth open, teeth
+  showing on a face that is not smiling, a black or blown exposure, the face
+  contour at the frame's edge, the camera under 25 cm
+  (`tooCloseGateEnabled`), and no camera data in the original
+  (`noCameraDataGateEnabled`). A smile showing teeth stays in and ranks low
+  (`smileKeepsTeeth`), as before. The camera distance comes from the iris
+  size the expression model already reports and the focal length in the
+  original's metadata, read from the phone's copy of the file; a photo with
+  no metadata is read as a phone's front camera (30 mm equivalent, counted
+  as `focalAssumed`), and a camera photo without a 35 mm equivalent gets no
+  distance. At the end of the scan a selfie whose more closed eye is under
+  40 percent of the shopper's median openness is withdrawn through `dropped`
+  (`relativeEyeGateEnabled`; on three libraries the fixed closed-eye gate
+  caught every such face first). `onGalleryMatchFound.scoreInputs` gains
+  `cameraCm`, `irisPx`, `eyeSpacingPx`, `focal35`, `focalAssumed` and
+  `cameraData`; `scoreFilter` gains `head pitched`, `head turned`, `mouth
+  open`, `teeth showing`, `exposure`, `too close` and `no camera data`.
+  `summary` gains `unusableGates` (a count per filter), `eyeDropped`,
+  `eyeBaseline`, `coverHints` (matched selfies the classifier labelled with
+  a scarf, mask, hood, earmuffs, headphones or tiara; logged, not filtered)
+  and `focalAssumed`. The results store's rules version is 4. Measured on
+  three libraries (124, 124 and 2,944 photos): on the large one the new
+  gates removed 12 turned heads, 6 pitched, 2 cut by the frame and 1 with no
+  camera data from 87 matches, none for distance (clean selfies sat at 27 to
+  45 cm), and the metadata read cost 0.7 s over 95 originals.
+
+- **Covered faces gated (plan item 2, the rest).** Behind `coverGatesEnabled`
+  in the controller, on. A photo sorted as a selfie is out when a cap or hat
+  is on (Vision's hat labels at 0.5 or more; was a ×0.6 demotion), when
+  clothes or an accessory cover 30 percent or more of the hairline band
+  (`coverHairlineLimit`) or 40 percent or more of the jaw band
+  (`coverJawLimit`), or when 15 percent or more of the face oval is neither
+  skin nor hair (`coverFaceLimit`): a hood, a scarf, a mask, an object. The
+  bands come from the MediaPipe multiclass selfie segmenter
+  (`FaceModels/selfie_multiclass_256x256.tflite`, 16.4 MB, Apache 2.0, run
+  by the new `FaceCover.swift`) on the head crop at 256 px. It reads only a
+  selfie that no other gate has dropped (`coverReadEnabled`), about 170 ms a
+  read. Eyeglasses are untouched: they read 0.03 to 0.06 on the face oval
+  against 0.26 to 0.34 for sunglasses. `scoreFilter` gains `cap or hat`,
+  `hairline covered`, `jaw covered` and `face covered`; `scoreInputs` gains
+  `coverHairline`, `coverJaw` and `coverFace` when the segmenter read the
+  photo; `summary` gains `coverRead` and `coverFacts` (how many read selfies
+  sat over each limit). The results store's rules version is 6. Measured on
+  three libraries: the 124-photo one lost its three capped selfies to the
+  hat gate (two more had already gone for sunglasses) and nothing else; the
+  2,944-photo one lost one hooded head (hairline 0.82, no hat label from
+  Vision) and no selfie with eyeglasses; a bare jaw with the chin lowered
+  onto a dark polo collar read 0.33, which put the jaw limit at 0.4. The
+  read cost 2.5 s over 15 selfies on an iPhone 12.
+
+- **The raw readings behind the score.** `onGalleryMatchFound` gains
+  `scoreInputs`, what each part of `scoreParts` was worked out from: head
+  `yaw`, `pitch`, `roll` (degrees), `faceWidth` (pixels), `quality`,
+  `brightness`, `clipped`, `backlight`, `blur`, `smile`, `jawOpen`, `blink`,
+  `browUp`, `squint`, `eyeWide`, `teeth`, `sunglasses`, `cap`, `handOnFace`
+  (1 or 0), `dressy`, `busy`. Expression readings are left out when the
+  expression reader did not run, light readings when the face could not be
+  read.
+
+- **Score details in `onImageSelect`.** The callback gains `type`, `distance`,
+  `score`, `rank`, `scoreParts`, `scorePenalties`, `scoreFilter` and
+  `scoreInputs`. Each is left out when the controller did not send it.
+
+- **What is collected.** The score details of the photos a user selects are
+  sent to Swan's analytics. No photo ids, no images.
+
+### Changed
+
+- **Head-to-knee photos are not shown.** Behind `kneeLengthEnabled` in the
+  controller, off. Muses built from head-to-knee photos were not good
+  enough, so only head to toe counts as full length and a head-to-knee photo
+  is "not head to toe". `kneeUp` stays in the messages and is false; the
+  page's knee-up handling is unchanged for a controller that turns the rule
+  back on. On the 2,944-photo library 14 of 81 matches had come in on the
+  knee rule.
+
+### Fixed
+
+- **iCloud downloads stopped at the end of the scan.** The downloads still
+  queued when the iCloud pass reached its deadline, or when a new scan
+  replaced the running one, used to carry on in the background and their
+  results were thrown away. They are cancelled now; the few already in
+  flight finish within their timeout. Seen on a 3,544-photo library on
+  mobile data, where 22 downloads were left at the deadline.
+
+---
+
 ## [1.3.6] — 2026-10-28
 
 **Mobile iOS only.** The npm package is unchanged. **Controller: no update
@@ -82,19 +198,13 @@ https://swan-mobile-web-component.swan.so/v1.3.5/index.html
   `storeCloudSkipped`, `storeWritten` and `storeRecords`; absent when the
   store is off. The console summary gains a `store` line.
 
-- **Ranking in the selection events.** `photo_selected` and
-  `photo_deselected` gain `type`, `distance`, `score` and `rank` (place in the
-  grid, 1 is the first tile); `photo_deselected` also gains `auto`.
-  `selection_confirmed` gains `photos`, one entry per chosen photo with the same
-  fields and `auto` (chosen by the flow, not tapped). No asset ids. A field is
-  left out when the controller did not send it.
-
 - **Why a photo scored what it did.** `onGalleryMatchFound` gains
   `scoreParts` (each signal 0–1: `quality`, `pose`, `light`, `size`, `mouth`,
   `eyes`, `brow`, `sharp`), `scorePenalties` (what pulled the score down, for
   example `["closed smile", "cap"]`) and `scoreFilter` (what set it to 0, for
-  example `sunglasses`). The page adds them to the same selection events, so
-  two photos' rankings can be compared in PostHog.
+  example `sunglasses`). The page sends them, with each selected photo's
+  `type`, `distance`, `score` and grid position, to Swan's analytics. No photo
+  ids, no images.
 
 - **Score badge on the grid.** Each tile shows the host's `score` (0–1, two
   decimals) in its bottom-left corner, the number that sets the grid's order
@@ -124,8 +234,7 @@ https://swan-mobile-web-component.swan.so/v1.3.4/index.html
 
 ### Added
 
-- **Photo dates in the scan summary.** `summary` and the `scan_complete` event
-  gain, each as its own property:
+- **Photo dates in the scan summary.** `summary` gains:
   - `cloudFirstDownloadedDate` / `cloudLastDownloadedDate` — capture date of the
     first and last photo downloaded from iCloud, and `cloudFirstDownloadedAtMs`
     / `cloudLastDownloadedAtMs` — when each landed, in ms from the start of the
@@ -231,7 +340,7 @@ https://swan-mobile-web-component.swan.so/v1.3.3/index.html
   different photos of you, or take new ones now." — new keys
   `capturePage.limitedHeadingTitle` and `limitedSubHeadingTitle`. The camera
   button (`capturePage.buttonText`) is "Take new photos", on the no-match
-  screen and on Take it now. `capture_fallback_shown` gains `limited`.
+  screen and on Take it now.
   **If your `ViewController.swift` sends its own `capturePage` text** — the
   earlier sample did, asking for three photos "taken automatically after a
   countdown" — remove that block: it overrides the new text and no longer
@@ -308,16 +417,14 @@ https://swan-mobile-web-component.swan.so/v1.3.1/index.html
   the default; on the rear one the photo is taken at once, with no countdown,
   since someone else is holding the phone. The first selfie, the one photos are
   matched against, stays on the front camera. The switch shows only on phones
-  with two cameras; `common.switchCameraText` labels it. `camera_opened` now
-  says which camera opened.
+  with two cameras; `common.switchCameraText` labels it.
 
 ### Fixed
 
 - **Photos taken in the flow were cut to a square.** The camera was asked for a
   square picture, so a full-length front or side photo lost the head or the
   feet. These photos now keep the camera's upright shape. The first selfie,
-  used only for its face, is unchanged. Each photo taken is reported as
-  `camera_capture`, with its size, the camera and the shot.
+  used only for its face, is unchanged.
 
 ---
 

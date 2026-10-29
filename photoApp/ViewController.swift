@@ -1,6 +1,6 @@
 
 
-// Swan Gallery Pick host — pairs with Swan mobile 1.3.6. Release notes and
+// Swan Gallery Pick host — pairs with Swan mobile 1.3.7. Release notes and
 // whether this file needs updating: CHANGELOG.md.
 
 import UIKit
@@ -15,7 +15,7 @@ final class ViewController: UIViewController {
 
     /// Where the SDK bundle is served from. Must be **https** — getUserMedia needs
     /// a secure context, so an http or file:// URL gives no camera.
-    let sdkURL = URL(string: "https://swan-mobile-web-component.swan.so/v1.3.6/index.html")!
+    let sdkURL = URL(string: "https://swan-mobile-web-component.swan.so/v1.3.7/index.html")!
 
     static let bridgeName = "swanBridge"
 
@@ -186,6 +186,10 @@ final class ViewController: UIViewController {
         return result == KERN_SUCCESS ? Int(info.resident_size / 1_048_576) : 0
     }
     var lastBodyRetry: (note: String, rescued: Bool)?
+    /// Pupil-to-pupil distance of the widest face in the photo just examined,
+    /// in the scan's pixels. Nil without landmarks. For the v2 selfie rule and
+    /// the `selfieSmallEyes` count.
+    var lastEyeSpacing: CGFloat?
 
     /// How many faces in the last photo examined were the shopper's. Above 1 it was
     /// a mirror shot — see `sameShopperFacesMax`. Read by the scan log and summary.
@@ -411,6 +415,7 @@ final class ViewController: UIViewController {
             let started = Date()
             _ = Self.faceRecognizer
             FaceExpression.warmUp()
+            if Self.coverReadEnabled { FaceCover.warmUp() }
             let hands = VNDetectHumanHandPoseRequest()
             if let ctx = CGContext(data: nil, width: 64, height: 64, bitsPerComponent: 8, bytesPerRow: 0,
                                    space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue),
@@ -548,6 +553,10 @@ final class ViewController: UIViewController {
 enum PhotoType: String {
     case front
     case side
+    /// A full-length photo turned between `threeQuarterDegrees` and
+    /// `sideTurnDegrees`. The page puts it in a side slot. Only sent when
+    /// `typeSortV2` is on.
+    case threeQuarter = "three-quarter"
     case selfie
     /// No face was found. Usually a back view, sometimes an unusable photo — read
     /// alongside `isFullBody` to tell those apart.
@@ -1008,10 +1017,105 @@ extension ViewController {
     /// lower body to count as a selfie (cropped shots 15–25%, real selfies 37%+).
     static let selfieFaceRatio: CGFloat = 0.30
 
+    /// The v2 type sort — GALLERY_PICK_V2_PLAN.md, item 1. On: a selfie is a
+    /// face with no knee or ankle joint in frame (hips may show) and, once
+    /// `selfieEyeFloorEnabled` is on, eye spacing of `selfieEyeSpacingPixels`
+    /// or more; a knee-up photo is never a selfie; a full-length photo turned
+    /// between `threeQuarterDegrees` and `sideTurnDegrees` is a three-quarter,
+    /// which the page puts in a side slot. Off: the 1.3.x rules — a face 30% of
+    /// the frame is a selfie, full-length photos are front or side only.
+    static let typeSortV2 = true
+    /// Pupil to pupil, in the original photo's pixels (the face texture comes
+    /// from the original, as the 120 px face floor is measured), under which a
+    /// face is too small for the Muse. The spec's 60 px gate; the 120 px face
+    /// floor is about 48 px of eye spacing, so this removes faces up to about
+    /// 145 px wide. Counted on two test libraries first (0 selfies under it on
+    /// both, 29 Oct 2026), then switched on. `selfieSmallEyes` in the summary
+    /// keeps the count.
+    static let selfieEyeSpacingPixels: CGFloat = 60
+    static let selfieEyeFloorEnabled = true
+
+    /// The v2 selfie gates — GALLERY_PICK_V2_PLAN.md, item 2, the part that
+    /// needs no new model. On, for photos sorted as selfies: the head pitched
+    /// past `gatePitchDegrees` or turned past `gateYawDegrees`, the mouth open
+    /// or teeth showing, a black or blown exposure, the face contour at the
+    /// frame's edge and the camera under `tooCloseCm` each rule the photo out
+    /// (score 0, hidden) where 1.3.x ranked it lower or let it through. Off: the
+    /// 1.3.x rules. The covered-face gates (hood, scarf, mask, object) wait for
+    /// the segmenter; see `coverLabels` for what is logged meanwhile.
+    static let selfieGatesV2 = true
+    /// Pitch at the spec's 15°. Yaw at 20°, not the spec's starting 15°: on a
+    /// 2,944-photo library 5 of the 12 faces gated at 15° were turned 17° to
+    /// 24°, near-frontal by eye, and Vision's yaw is a rough reading; the
+    /// clear turns sat at 36° and over (29 Oct 2026).
+    static let gatePitchDegrees: Float = 15
+    static let gateYawDegrees: Float = 20
+    /// Camera to face, from the iris (11.7 mm in everyone) or, without iris
+    /// points, the eye spacing (63 mm on average) and the focal length. A photo
+    /// with no camera data at all is read as taken on a phone's front camera,
+    /// `assumedFocal35mm`: the iPhone 12, 13 Pro and 15 Pro front cameras all
+    /// write 30 mm equivalent (three test libraries, 29 Oct 2026). The summary
+    /// counts how often that assumption was used. Clean selfies on two
+    /// libraries measured 27 to 45 cm; nothing real sat under 25.
+    static let tooCloseGateEnabled = true
+    static let tooCloseCm: Float = 25
+    static let irisMm: Float = 11.7
+    static let eyeSpacingMm: Float = 63
+    static let assumedFocal35mm: Float = 30
+    /// The spec's "no camera data" gate: a selfie whose original carries no
+    /// camera make, model or focal length (saved from an app, exported and
+    /// re-imported) is out. A photo whose metadata cannot be read in time (only
+    /// in iCloud) is not judged on it. Counted in the summary as `noCameraData`.
+    static let noCameraDataGateEnabled = true
+    /// Either eye under `relativeOpenness` of the shopper's usual openness: the
+    /// median over the scan's clean selfies, once `relativeBaselineMin` of them
+    /// are in; decided at the end of the scan and withdrawn through `dropped`.
+    /// The fixed closed-eye and wink gates still apply as the photo streams.
+    static let relativeEyeGateEnabled = true
+    static let relativeOpenness: Float = 0.4
+    static let relativeBaselineMin = 3
+    /// Part 2 of the selfie gates: what covers the face, read by `FaceCover`
+    /// from the MediaPipe selfie segmenter on a matched selfie that no other
+    /// gate has dropped. With `coverGatesEnabled` a selfie is out when the
+    /// hairline band, the jaw band or the face oval is covered past the
+    /// limits below, or when Vision's classifier names a cap or hat
+    /// (`MuseScore.hatLabels`, which only lowered the score before). With
+    /// the gates off every matched selfie is read: its MATCH line carries the
+    /// readings and the summary counts them against the limits, so the
+    /// gates' reach can be seen before they are turned on.
+    static let coverReadEnabled = true
+    static let coverGatesEnabled = true
+    /// From three libraries (29 Oct 2026): caps read hairline 0.37–0.52 and a
+    /// hood 0.82 against 0.00–0.12 bare; bare jaws read 0.00–0.09, except
+    /// 0.33 with the chin lowered onto a dark polo collar, so the jaw limit
+    /// sits above that; eyeglasses read face 0.03–0.06 and sunglasses
+    /// 0.26–0.34, so the face limit sits above glasses.
+    static let coverHairlineLimit: Float = 0.3
+    static let coverJawLimit: Float = 0.4
+    static let coverFaceLimit: Float = 0.15
+
     /// A face's width against the frame's shorter side — the one number every
     /// selfie decision reads, so the scan and a tap cannot disagree about it.
     static func faceRatio(boxWidth: CGFloat, in cgImage: CGImage) -> CGFloat {
         boxWidth * CGFloat(cgImage.width) / CGFloat(min(cgImage.width, cgImage.height))
+    }
+
+    /// Pupil to pupil in the image's pixels, from the eye landmarks of one face —
+    /// the v2 selfie floor's measure. Nil when the face has no landmarks.
+    static func eyeSpacing(of face: VNFaceObservation?, in cgImage: CGImage, handler: VNImageRequestHandler? = nil) -> CGFloat? {
+        guard var face else { return nil }
+        // The scan detects faces as rectangles; the landmarks are fetched here
+        // for the one face that needs them, on the handler that already holds
+        // the image — a few ms.
+        if face.landmarks == nil, let handler {
+            let request = VNDetectFaceLandmarksRequest()
+            request.inputFaceObservations = [face]
+            try? handler.perform([request])
+            guard let withLandmarks = request.results?.first else { return nil }
+            face = withLandmarks
+        }
+        guard let points = FaceRecognizer.fivePoints(face, width: cgImage.width, height: cgImage.height) else { return nil }
+        return hypot(points[1].x - points[0].x, points[1].y - points[0].y)
     }
 
     /// Head turn, in Vision's yaw radians, for a full-length photo to count as a
@@ -1034,8 +1138,15 @@ extension ViewController {
     /// frame (toes cut off ~0.05, good full-length ~0.14+).
     static let minFootRoom: CGFloat = 0.10
 
-    /// Knee length is as good as head to toe: a photo passes with the head, this
-    /// many knees, enough span and the knees well below the hips.
+    /// The knee rule: a photo that fails the ankle rule above still passes with
+    /// the head and at least `minKnees` knees, the figure tall enough in the
+    /// frame, and the knees well below the hips. Off since 29 Oct 2026: the
+    /// Muses built from head-to-knee photos were not good enough, so only head
+    /// to toe counts as full length and a knee-length photo is "not head to
+    /// toe". The rule was removed once before because strangers reached the
+    /// grid through it under FeaturePrint, which matched the whole picture;
+    /// that reason is gone (SFace matches the face), this one is the Muse.
+    static let kneeLengthEnabled = false
     static let minKnees = 1
 
     /// Head to lowest knee as a fraction of the image height: the ankle spans
@@ -1056,6 +1167,13 @@ extension ViewController {
     /// as a spread.
     static let sideShoulderSpread: CGFloat = frontShoulderSpread * CGFloat(cos(sideTurnDegrees * .pi / 180))
 
+    /// Turn from the camera, in degrees, from which a full-length photo is a
+    /// three-quarter rather than a front — the spec's "about 30°". Up to
+    /// `sideTurnDegrees` it is a three-quarter, past that a side; both fill
+    /// side slots on the page. Only with `typeSortV2`.
+    static let threeQuarterDegrees: Double = 30
+    static let threeQuarterShoulderSpread: CGFloat = frontShoulderSpread * CGFloat(cos(threeQuarterDegrees * .pi / 180))
+
     /// The body's turn from the camera that a shoulder spread implies, in degrees.
     static func turnDegrees(spread: CGFloat) -> Double {
         acos(Double(min(1, max(0, spread / frontShoulderSpread)))) * 180 / .pi
@@ -1067,7 +1185,26 @@ extension ViewController {
 
     /// One photo's type, from values the caller already has. Shared by the scan and
     /// `classifyPhotoType` so the two cannot disagree.
-    static func photoType(faceRatio: CGFloat, yaw: Double?, body: BodyCheck) -> PhotoType {
+    static func photoType(faceRatio: CGFloat, eyeSpacing: CGFloat? = nil, yaw: Double?, body: BodyCheck) -> PhotoType {
+        if typeSortV2 {
+            // A selfie is a face with no lower-body joint in frame. Until the eye
+            // floor is switched on, the 1.3.x face ratio stands in beside it, so
+            // the count of selfies the floor would drop can be read first.
+            let bigEnough = selfieEyeFloorEnabled
+                ? (eyeSpacing ?? 0) >= selfieEyeSpacingPixels
+                : faceRatio >= selfieFaceRatio || (eyeSpacing ?? 0) >= selfieEyeSpacingPixels
+            if body.lowerJoints == 0 && bigEnough { return .selfie }
+            // Not a selfie and not head to toe (or knee): neither.
+            if !body.isHeadToToe { return .unknown }
+            // The body's own turn: side past `sideTurnDegrees`, three-quarter from
+            // `threeQuarterDegrees`, front below. The head only without shoulders.
+            if let spread = body.shoulderSpread {
+                if spread < sideShoulderSpread { return .side }
+                return spread < threeQuarterShoulderSpread ? .threeQuarter : .front
+            }
+            guard let yaw else { return .unknown }
+            return headType(yaw: yaw)
+        }
         // Not head to toe. A big face is a face photo; a small one is someone cut
         // off or too far away, which the full-body gate exists to reject.
         if !body.isHeadToToe {
@@ -1229,6 +1366,7 @@ extension ViewController {
             // The expression reader and hand detector load on first use; paid here
             // rather than on the first match. Nothing is kept from either pass.
             FaceExpression.warmUp()
+            if Self.coverReadEnabled { FaceCover.warmUp() }
             if Self.evalMode, let crop = self.crop(selfieCG, to: CGRect(x: 0.25, y: 0.25, width: 0.5, height: 0.5)) {
                 recognizer.benchmark(on: crop)
             }
@@ -1466,8 +1604,23 @@ extension ViewController {
             var sameShopper = 0
             // Matches in on the knee rule alone — see `minKnees`.
             var kneeLength = 0
+            // Matched selfies under the v2 eye-spacing floor — see `selfieEyeFloorEnabled`.
+            var selfieSmallEyes = 0
             // Matches kept out for a face the Muse cannot use — see `unusableFaceDrops`.
             var unusableFace = 0
+            // The same, per filter — the v2 selfie gates' counts.
+            var unusableGates: [String: Int] = [:]
+            // Matched selfies the classifier marked with a head covering or an
+            // object over the face — see `MuseScore.coverLabels`.
+            var coverHints = 0
+            // Matched selfies whose focal length was assumed — see `assumedFocal35mm`.
+            var focalAssumed = 0
+            // Eye openness of each clean matched selfie, for the relative gate.
+            var selfieOpenness: [String: Float] = [:]
+            // Matched selfies the segmenter read, and how many sat over each
+            // cover limit — see `coverReadEnabled`.
+            var coverRead = 0
+            var coverFacts: [String: Int] = [:]
 
             // One loaded photo through every gate. Shared by the local pass and the
             // iCloud pass, so a downloaded photo faces exactly the same checks.
@@ -1625,6 +1778,17 @@ extension ViewController {
                         let cutoff = profile ? Self.profileMatchThreshold
                             : type == .selfie ? Self.selfieMatchThreshold
                             : Self.matchThreshold
+                        // Facts for the gates still to come, on every matched selfie.
+                        if distance < cutoff, type == .selfie, let museScore {
+                            if museScore.coverHint { coverHints += 1 }
+                            if museScore.focalAssumed { focalAssumed += 1 }
+                            if let cover = museScore.cover {
+                                coverRead += 1
+                                if cover.hairline >= Self.coverHairlineLimit { coverFacts["hairline", default: 0] += 1 }
+                                if cover.jaw >= Self.coverJawLimit { coverFacts["jaw", default: 0] += 1 }
+                                if cover.face >= Self.coverFaceLimit { coverFacts["face", default: 0] += 1 }
+                            }
+                        }
 
                         if distance >= cutoff {
                             noMatch += 1
@@ -1646,6 +1810,7 @@ extension ViewController {
                             // Before sizing: nothing is fetched for a photo that
                             // will not be shown.
                             unusableFace += 1
+                            unusableGates[why, default: 0] += 1
                             remember(asset, .unusableFace)
                             eval.note(asset, image: image, rotated: wasRotated, gate: .unusableFace, distance: distance,
                                       type: type, body: body, metrics: metrics,
@@ -1717,6 +1882,12 @@ extension ViewController {
                                                     id: asset.localIdentifier)
                             found[type, default: 0] += 1
                             if body.byKnees { kneeLength += 1 }
+                            // The more closed eye, for the relative gate at the end.
+                            if Self.relativeEyeGateEnabled, type == .selfie, let e = museScore?.expression {
+                                selfieOpenness[asset.localIdentifier] = 1 - e.blinkMax
+                            }
+                            // Selfies the v2 eye floor would drop once it is on.
+                            if type == .selfie, (self?.lastEyeSpacing ?? Self.selfieEyeSpacingPixels) < Self.selfieEyeSpacingPixels { selfieSmallEyes += 1 }
 
                             // Streamed as found so the grid fills during the scan.
                             // Only the id travels; the page fetches its own pixels.
@@ -1734,6 +1905,10 @@ extension ViewController {
                                 var matchPayload: [String: Any] = ["assetId": matchedId,
                                                                    "type": matchedType,
                                                                    "isFullBody": matchedFullBody,
+                                                                   // Head to knee, not to toe: the page
+                                                                   // pre-selects it only when no head-to-toe
+                                                                   // photo is left for the slot.
+                                                                   "kneeUp": body.byKnees,
                                                                    // Lower is closer; the page falls back to
                                                                    // it when no score is sent.
                                                                    "distance": distance,
@@ -1751,7 +1926,7 @@ extension ViewController {
                                     self?.sendToWeb(["type": "onGalleryMatchFound", "payload": matchPayload])
                                 }
                             }
-                            if Self.verboseLogging { print("  ✅ [\(n)] MATCH\(held ? " (held)" : "")     d=\(String(format: "%.3f", distance)) cut=\(String(format: "%.2f", cutoff))  \(px) \(orient)  face=\(facePixels)px joints=\(body.lowerJoints)\(body.byKnees ? " knee-length" : "") type=\(type.rawValue) shoulders=\(body.shoulderSpread.map { String(format: "%.2f (~%.0f°)", $0, Self.turnDegrees(spread: $0)) } ?? "–") original=\((originalBytes ?? 0) / 1024)KB  [\(scores)]  \(museScore?.note ?? "")") }
+                            if Self.verboseLogging { print("  ✅ [\(n)] MATCH\(held ? " (held)" : "")     d=\(String(format: "%.3f", distance)) cut=\(String(format: "%.2f", cutoff))  \(px) \(orient)  face=\(facePixels)px eyes=\(self?.lastEyeSpacing.map { String(format: "%.0f", $0) } ?? "?")px joints=\(body.lowerJoints)\(body.byKnees ? " knee-length" : "") type=\(type.rawValue) shoulders=\(body.shoulderSpread.map { String(format: "%.2f (~%.0f°)", $0, Self.turnDegrees(spread: $0)) } ?? "–") original=\((originalBytes ?? 0) / 1024)KB  [\(scores)]  \(museScore?.note ?? "")") }
                         }
                     }
 
@@ -1935,6 +2110,7 @@ extension ViewController {
             var cloudExtended = false
             for job in cloudJobs {
                 guard self?.scanGeneration == generation else {
+                    cloudQueue.cancelAllOperations()
                     print("\u{1f6d1} Scan superseded — stopping in the iCloud pass")
                     return
                 }
@@ -1994,6 +2170,10 @@ extension ViewController {
                     }
                 }
             }
+            // Nothing reads a download that lands after the deadline: the jobs
+            // still queued are dropped here instead of running on in the
+            // background. The few already in flight finish within their timeout.
+            cloudQueue.cancelAllOperations()
 
             // Not for a scan another one has replaced: its records are already
             // in the newer store, and two writers on one file help nobody.
@@ -2002,6 +2182,32 @@ extension ViewController {
             let cloudWaited = Date().timeIntervalSince(cloudPassStarted)
             let elapsed = Date().timeIntervalSince(startedAt)
             let rate = Double(examined) / max(elapsed, 0.001)
+
+            // The relative eye gate — see `relativeEyeGateEnabled`: with every
+            // selfie in, the shopper's usual openness is the median over the clean
+            // ones, and a selfie whose more closed eye is under `relativeOpenness`
+            // of it is withdrawn, through `dropped` like the gap rule below.
+            var eyeDropped: [String] = []
+            var eyeBaseline: Float?
+            if Self.relativeEyeGateEnabled, selfieOpenness.count >= Self.relativeBaselineMin {
+                let sorted = selfieOpenness.values.sorted()
+                let median = sorted.count % 2 == 1 ? sorted[sorted.count / 2] : (sorted[sorted.count / 2 - 1] + sorted[sorted.count / 2]) / 2
+                eyeBaseline = median
+                eyeDropped = matchedIds.filter { selfieOpenness[$0].map { $0 < Self.relativeOpenness * median } ?? false }
+                if !eyeDropped.isEmpty {
+                    let droppedSet = Set(eyeDropped)
+                    matchedIds.removeAll { droppedSet.contains($0) }
+                    heldIds.removeAll { droppedSet.contains($0) }
+                    for id in eyeDropped { if let score = matchScores[id] { found[score.type, default: 0] -= 1 } }
+                    unusableFace += eyeDropped.count
+                    unusableGates["eyes under usual", default: 0] += eyeDropped.count
+                    eval.regate(droppedSet, to: .unusableFace)
+                }
+                if Self.verboseLogging {
+                    let withdrawn = eyeDropped.compactMap { selfieOpenness[$0] }.sorted().map { String(format: "%.2f", $0) }.joined(separator: " ")
+                    print("  \u{1f441}  usual eye openness \(String(format: "%.2f", median)) over \(selfieOpenness.count) selfie(s) — withdrew \(eyeDropped.count) under \(Int(Self.relativeOpenness * 100))% of it\(withdrawn.isEmpty ? "" : "  [\(withdrawn)]")")
+                }
+            }
 
             // The gap rule, decided with every distance in: matches above the gap
             // are withdrawn from the final list and named in `dropped`.
@@ -2068,19 +2274,21 @@ extension ViewController {
                 group       \(groupSkipped)   (skipped: more than one face; \(sameShopper) more had several faces all the shopper's and went on)
                 others      \(otherPeople)   (skipped: someone else in the photo)
                 face small  \(tooSmall)   (under \(Int(Self.minFacePixels))px, even in the original)
-                not full body \(notFullBody)   (neither head to toe: head, \(Self.minAnkles)+ ankle, \(Int(Self.minBodySpan * 100))% span or \(Int(Self.minBodySpanBothAnkles * 100))% with both ankles, feet in frame — nor head to knee: \(Self.minKnees)+ knee, \(Int(Self.minKneeSpan * 100))% span or \(Int(Self.minKneeSpanBothKnees * 100))% with both knees, knees \(String(format: "%.1f", Self.minKneeDrop)) torso below the hips)
+                not full body \(notFullBody)   (not head to toe: head, \(Self.minAnkles)+ ankle, \(Int(Self.minBodySpan * 100))% span or \(Int(Self.minBodySpanBothAnkles * 100))% with both ankles, feet in frame\(Self.kneeLengthEnabled ? " — nor head to knee: \(Self.minKnees)+ knee, \(Int(Self.minKneeSpan * 100))% span or \(Int(Self.minKneeSpanBothKnees * 100))% with both knees, knees \(String(format: "%.1f", Self.minKneeDrop)) torso below the hips" : "; the knee rule is off, so a head-to-knee photo counts here"))
                 body retry  \(bodyRetried) re-checked at \(Int(Self.fullResPixels))px after a face match, \(bodyRescued) rescued
                 no match    \(noMatch)   (\(earlyNoMatch) decided from the face alone, before body pose)
                 gap cut     \(gapCut.map { String(format: "%.3f", $0) } ?? "none")\(weakCut ? " (weak reference fallback)" : "")   (\(gapDropped.count) withdrawn: matched under \(String(format: "%.2f", Self.matchThreshold)) but above the gap between the shopper's photos and the rest; \(heldIds.count) held back until the end, \(heldIds.count - gapDropped.count) of them shown)
                 sensitive   \(sensitiveSkipped)   (matched, then filtered)
-                unusable    \(unusableFace)   (matched, but the face is no use for the Muse: sunglasses, hand over it, eyes closed or a wink, cut by the frame, blurred)
+                unusable    \(unusableFace)   (matched, but the face is no use for the Muse: sunglasses, hand over it, eyes closed or a wink, cut by the frame, blurred\(Self.selfieGatesV2 ? "; v2 selfie gates: head pitched or turned, mouth open, teeth, exposure, too close, no camera data, eyes under usual" : ""))
+                gates       \(unusableGates.isEmpty ? "none" : unusableGates.sorted { $0.value > $1.value }.map { "\($0.key) \($0.value)" }.joined(separator: ", "))\(eyeBaseline.map { String(format: "; usual eye openness %.2f", $0) } ?? "")
+                2b facts    \(coverHints) matched selfie(s) with a scarf, mask, hood, earmuffs, headphones or tiara label (not filtered yet); focal length assumed on \(focalAssumed); segmenter read on \(coverRead) selfie(s): over the cover limits hairline \(coverFacts["hairline", default: 0]) (≥ \(Self.coverHairlineLimit)), jaw \(coverFacts["jaw", default: 0]) (≥ \(Self.coverJawLimit)), face \(coverFacts["face", default: 0]) (≥ \(Self.coverFaceLimit))\(Self.coverGatesEnabled ? "" : " — gates off, counted only")
                 too large   \(tooLargeSkipped)   (original over \(Original.byteCap / 1_048_576)MB — hidden, nothing is sent compressed)
                 no original \(noOriginal)   (original unreadable or not downloaded in time; \(sizedByPixels) too slow to size but shown on pixel count)
                 low data    \(lowDataSkipped)   (only in iCloud, not downloaded — Low Data Mode is on)
                 sized       \(sized) original(s), \(downloadedToSize) from iCloud, \(String(format: "%.1f", sizingSeconds))s
                 store       \(store == nil ? "off" : "\(storeDecided) decided without loading, \(storeCloudSkipped) iCloud skipped, \(store?.written ?? 0) written, \(store?.count ?? 0) remembered")
                 duplicates  \(duplicates)   (matches that repeat an earlier one; shown, but only one of each is pre-selected)
-                MATCHED     \(matchedIds.count)   (selfie \(found[.selfie, default: 0]), front \(found[.front, default: 0]), side \(found[.side, default: 0]); \(kneeLength) in on the knee rule)
+                MATCHED     \(matchedIds.count)   (selfie \(found[.selfie, default: 0]), front \(found[.front, default: 0]), three-quarter \(found[.threeQuarter, default: 0]), side \(found[.side, default: 0]); \(kneeLength) in on the knee rule; \(selfieSmallEyes) selfie(s) under \(Int(Self.selfieEyeSpacingPixels))px eye spacing\(Self.selfieEyeFloorEnabled ? "" : " — floor off, counted only"))
                 elapsed     \(String(format: "%.1f", elapsed))s  (\(String(format: "%.0f", rate))/s)
                 memory      \(memoryAtStart)MB at start, peak \(max(memoryPeak, Self.residentMB()))MB during the scan (this process; the web view's process is separate)
                 stages      \((self?.stageMs ?? [:]).sorted { $0.key < $1.key }.map { "\($0.key) \(String(format: "%.1f", $0.value / 1000))s" }.joined(separator: " · "))
@@ -2118,6 +2326,16 @@ extension ViewController {
                 summary["gapHeld"] = heldIds.count
                 summary["sensitive"] = sensitiveSkipped
                 summary["unusableFace"] = unusableFace
+                // Per filter — the v2 selfie gates' counts; the relative eye gate's
+                // baseline and withdrawals; the facts logged for the covered-face
+                // gates and the focal-length assumption. See `selfieGatesV2`.
+                if !unusableGates.isEmpty { summary["unusableGates"] = unusableGates }
+                summary["eyeDropped"] = eyeDropped.count
+                summary["eyeBaseline"] = eyeBaseline
+                summary["coverHints"] = coverHints
+                summary["focalAssumed"] = focalAssumed
+                summary["coverRead"] = coverRead
+                if !coverFacts.isEmpty { summary["coverFacts"] = coverFacts }
                 summary["duplicates"] = duplicates
                 summary["tooLarge"] = tooLargeSkipped
                 summary["noOriginal"] = noOriginal
@@ -2126,7 +2344,10 @@ extension ViewController {
                 summary["matchedSelfie"] = found[.selfie, default: 0]
                 summary["matchedFront"] = found[.front, default: 0]
                 summary["matchedSide"] = found[.side, default: 0]
+                summary["matchedThreeQuarter"] = found[.threeQuarter, default: 0]
                 summary["kneeLength"] = kneeLength
+                // Selfies under the v2 eye-spacing floor; dropped once the floor is on.
+                summary["selfieSmallEyes"] = selfieSmallEyes
                 // Matches lowered for a pitched or turned head; shown on pixel count
                 // because the original was too slow to size; downloads in flight at
                 // once (3 on mobile data, 6 on Wi-Fi).
@@ -2181,6 +2402,7 @@ extension ViewController {
                     var heldPayload: [String: Any] = ["assetId": id,
                                                       "type": score.type.rawValue,
                                                       "isFullBody": ScanAnalysisStore.analysis(for: id)?.body.isHeadToToe ?? true,
+                                                      "kneeUp": ScanAnalysisStore.analysis(for: id)?.body.byKnees ?? false,
                                                       "distance": score.distance,
                                                       "dupGroup": dupGroups[id] ?? id,
                                                       "done": total,
@@ -2193,8 +2415,9 @@ extension ViewController {
                 self?.sendToWeb(["type": "onGalleryScanComplete",
                                  "payload": ["assetIds": ordered,
                                              // Matches the page may already show that the
-                                             // gap rule withdrew — see `gapCutEnabled`.
-                                             "dropped": gapDropped,
+                                             // gap rule or the relative eye gate withdrew —
+                                             // see `gapCutEnabled`, `relativeEyeGateEnabled`.
+                                             "dropped": gapDropped + eyeDropped,
                                              "limited": self?.isLimitedAccess ?? false,
                                              // What the scan could not look at, for
                                              // analytics — the page shows none of it.
@@ -2333,6 +2556,24 @@ struct MuseScore {
     let outfit: Outfit
     let dressy: Bool
     let busy: Bool
+    /// The raw readings the parts were worked out from: angles in degrees, face
+    /// width in pixels, the rest as the detectors report them. Sent in
+    /// `breakdown` as `scoreInputs`.
+    let readings: [String: Double]
+    /// Camera to face in centimetres and what it was read from (`iris` or
+    /// `eyes`), when the v2 selfie gates ran; whether the focal length was
+    /// assumed — see `ViewController.assumedFocal35mm`.
+    let cameraCm: Float?
+    let cameraFrom: String?
+    let focalAssumed: Bool
+    /// What the metadata read saw, for the console — see `Original.Camera`.
+    let cameraDetail: String?
+    /// What covers the face, when it was read — see `FaceCover` and
+    /// `ViewController.coverGatesEnabled`. Nil when a cheaper gate fired first.
+    let cover: FaceCover?
+    /// A head covering or an object over the face by the classifier's labels —
+    /// see `coverLabels`. Logged, not filtered.
+    var coverHint: Bool { labels.contains { Self.coverLabels.contains($0.key) && $0.value >= Self.coverConfidence } }
 
     /// Apple's capture quality carries the most; the three expression terms together
     /// carry 0.35, which puts a neutral face above a smile, stare or wink. A selfie
@@ -2348,6 +2589,27 @@ struct MuseScore {
     static let sunglassesConfidence: Float = 0.4
     static let hatConfidence: Float = 0.5
     static let hatLabels: Set<String> = ["hat", "baseball_hat", "sunhat", "cowboy_hat", "beanie", "helmet", "hardhat"]
+    /// Head coverings and objects over the face that the covered-face gates
+    /// will read from the segmenter (plan item 2b). Until then Vision's
+    /// classifier names them on the head crop; a selfie with one at
+    /// `coverConfidence` or more is logged and counted (`coverHints` in the
+    /// summary), so the gates' reach is known before they ship. Nothing is
+    /// filtered on them yet; `hatLabels` stay the cap demotion.
+    static let coverLabels: Set<String> = ["scarf", "mask", "gas_mask", "hoodie", "earmuffs", "headphones", "tiara"]
+    static let coverConfidence: Float = 0.3
+
+    /// What the v2 selfie gates read beyond the face — see
+    /// `ViewController.selfieGatesV2`. Passed for photos sorted as selfies only.
+    struct SelfieGates {
+        /// Pupil to pupil in the original's pixels; nil when not measured.
+        let eyeSpacingOriginal: Float?
+        /// One pixel of the scan's render in the original's pixels.
+        let originalScale: Float
+        /// The original's long side in pixels, for the focal length in pixels.
+        let originalLongSide: Float
+        /// Nil when the metadata could not be read (original only in iCloud).
+        let camera: Original.Camera?
+    }
     /// A capped photo keeps this much of its score: behind a bare-headed one of
     /// the same quality, ahead of a poor one. A product call, not a measurement.
     static let capMultiplier: Float = 0.6
@@ -2360,6 +2622,15 @@ struct MuseScore {
     /// Expression cuts, set so a relaxed neutral face is rarely caught. A slight
     /// smile (0.3) stays in.
     static let smileFilter: Float = 0.5
+    /// Under the v2 selfie gates, a smile at this level or more keeps a photo
+    /// in with the teeth showing: it ranks low, as in 1.3.x
+    /// (`openSmileMultiplier`), rather than falling out. The "teeth showing"
+    /// gate applies to a face that is not smiling; the "mouth open" gate
+    /// (`mouthOpenFilter`) applies to every face, so a laugh is still out. A
+    /// product call of 29 Oct 2026, checked on a library where the grins to
+    /// keep read jaw 0.02–0.07 and the laughs to drop 0.40–0.45; the spec's
+    /// text gates every smile showing teeth, so the client is told.
+    static let smileKeepsTeeth: Float = 0.3
     /// Lips parted: the jaw open this much or teeth showing (`FaceExpression.teeth`,
     /// closed lips ≤ 0.11).
     static let lipsPartedJaw: Float = 0.15
@@ -2446,7 +2717,8 @@ struct MuseScore {
 
     init(face: VNFaceObservation, in image: CGImage, handler: VNImageRequestHandler, faceWidth: CGFloat,
          expression: FaceExpression? = nil, labels: [String: Float] = [:], handOnFace: Bool = false,
-         outfit: Outfit = Outfit(label: nil, dressy: 0, busy: 0), selfie: Bool = false) {
+         outfit: Outfit = Outfit(label: nil, dressy: 0, busy: 0), selfie: Bool = false, gates: SelfieGates? = nil,
+         coverReader: (() -> FaceCover?)? = nil) {
         let clamp = { (v: Float) in max(0, min(1, v)) }
         var parts: [(name: String, value: Float)] = []
         var filter: String?
@@ -2498,7 +2770,10 @@ struct MuseScore {
             // by a wild margin. Anything else is a cast.
             let cast: Float = (f.r >= f.g && f.g >= f.b) ? (f.r - f.b > 0.5 ? 0.7 : 1) : 0.6
             light = (exposure + clip + balance + backlit + cast) / 5
-            if f.mean < 0.08 || f.mean > 0.92 { lowered.append("exposure") }
+            // A gate under the v2 selfie rules, a demotion otherwise.
+            if f.mean < 0.08 || f.mean > 0.92 {
+                if gates == nil { lowered.append("exposure") } else { filter = filter ?? "exposure" }
+            }
             if f.laplacian < Self.blurVariance { filter = filter ?? "blurred" }
         }
         parts.append(("light", light))
@@ -2526,7 +2801,7 @@ struct MuseScore {
                 // so the two multipliers compound — see `smileBrowUp`.
                 smile = lipsParted ? .open : .closed
                 if e.browUp >= Self.smileBrowUp || e.eyeWide >= Self.smileEyeWide { wideEyed = true }
-            } else if e.jawOpen >= Self.mouthOpenFilter { lowered.append("mouth open") }
+            } else if e.jawOpen >= Self.mouthOpenFilter, gates == nil { lowered.append("mouth open") }
             // Wide-eyed, three readings, ranks low — see `wideEyedMultiplier`.
             // With a smile it is out, above.
             if (e.browUp >= Self.staringBrow && e.squint < Self.staringSquintBelow)
@@ -2561,10 +2836,120 @@ struct MuseScore {
         parts.append(("eyes", eyes))
         parts.append(("brow", brow))
 
+        // The v2 selfie gates — see `ViewController.selfieGatesV2`. Each is a
+        // filter where 1.3.x ranked the photo lower or let it through. The
+        // first filter found above stays the named one.
+        var cameraCm: Float?
+        var cameraFrom: String?
+        var focalAssumed = false
+        var cover: FaceCover?
+        if let gates {
+            if pitch > ViewController.gatePitchDegrees { filter = filter ?? "head pitched" }
+            if yaw > ViewController.gateYawDegrees { filter = filter ?? "head turned" }
+            // The jaw gates every face; the teeth only one that is not smiling —
+            // see `smileKeepsTeeth`.
+            if let e = expression {
+                if e.jawOpen >= Self.mouthOpenFilter { filter = filter ?? "mouth open" }
+                if e.smile < Self.smileKeepsTeeth, e.teeth >= Self.teethShowing { filter = filter ?? "teeth showing" }
+            }
+            // The face contour at the frame's edge: a chin or an ear the box's
+            // margin above still clears. The hairline has no landmark; the box
+            // test keeps the top.
+            if let contour = landmarksRequest.results?.first?.landmarks?.faceContour?.pointsInImage(imageSize: size),
+               contour.contains(where: { $0.x < size.width * 0.01 || $0.x > size.width * 0.99 || $0.y < size.height * 0.01 }) {
+                filter = filter ?? "face cut by the frame"
+            }
+            // Camera to face: focal length in the original's pixels, then the
+            // iris (every iris is 11.7 mm) or, without iris points, the eyes.
+            // A camera photo with a lens length but no 35 mm equivalent (a DSLR
+            // on a test library read 85 mm, which is 136 mm on its sensor) gives
+            // no distance; only a photo with no camera data at all is read as a
+            // phone's front camera.
+            let focal35: Float?
+            if let known = gates.camera?.focal35mm { focal35 = known }
+            else if gates.camera?.focalMm != nil { focal35 = nil }
+            else { focal35 = ViewController.assumedFocal35mm; focalAssumed = true }
+            if let focal35 {
+                let focalPx = focal35 / 36 * gates.originalLongSide
+                if let iris = expression?.irisPixels, iris > 0 {
+                    cameraCm = focalPx * ViewController.irisMm / (iris * gates.originalScale) / 10
+                    cameraFrom = "iris"
+                } else if let eyes = gates.eyeSpacingOriginal, eyes > 0 {
+                    cameraCm = focalPx * ViewController.eyeSpacingMm / eyes / 10
+                    cameraFrom = "eyes"
+                }
+            }
+            if ViewController.tooCloseGateEnabled, let cm = cameraCm, cm < ViewController.tooCloseCm { filter = filter ?? "too close" }
+            if ViewController.noCameraDataGateEnabled, gates.camera?.present == false { filter = filter ?? "no camera data" }
+            // What covers the face — see `ViewController.coverGatesEnabled`. The
+            // segmenter runs last and only for a selfie nothing above has
+            // dropped; with the gates off it runs for every selfie, to be logged.
+            if ViewController.coverGatesEnabled {
+                if capped { filter = filter ?? "cap or hat" }
+                if filter == nil { cover = coverReader?() }
+                if let cover {
+                    if cover.hairline >= ViewController.coverHairlineLimit { filter = filter ?? "hairline covered" }
+                    if cover.jaw >= ViewController.coverJawLimit { filter = filter ?? "jaw covered" }
+                    if cover.face >= ViewController.coverFaceLimit { filter = filter ?? "face covered" }
+                }
+            } else {
+                cover = coverReader?()
+            }
+        }
+        self.cameraCm = cameraCm
+        self.cameraFrom = cameraFrom
+        self.focalAssumed = focalAssumed
+        self.cameraDetail = gates.map { $0.camera?.detail ?? "unreadable (only in iCloud?)" }
+        self.cover = cover
+
         // Sharpness on a log scale: variance 1e-3 scores 0, 3e-2 scores 1 — see
         // `blurVariance` for where real faces land.
         let sharp = faceStats.map { clamp((log10(max($0.laplacian, 1e-8)) + 3) / 1.5) } ?? 0.5
         parts.append(("sharp", sharp))
+
+        // What the parts above were worked out from, for `breakdown`. One
+        // assignment each: a literal this long is more than the type-checker will take.
+        let fixed = { (v: Float, places: Double) in (Double(v) * pow(10, places)).rounded() / pow(10, places) }
+        var readings: [String: Double] = [:]
+        readings["yaw"] = fixed(yaw, 1)
+        readings["pitch"] = fixed(pitch, 1)
+        readings["roll"] = fixed(roll, 1)
+        readings["faceWidth"] = Double(faceWidth).rounded()
+        readings["quality"] = fixed(quality, 3)
+        readings["sunglasses"] = fixed(labels["sunglasses"] ?? 0, 2)
+        readings["cap"] = fixed(labels.filter { Self.hatLabels.contains($0.key) }.values.max() ?? 0, 2)
+        readings["handOnFace"] = handOnFace ? 1 : 0
+        readings["dressy"] = fixed(outfit.dressy, 2)
+        readings["busy"] = fixed(outfit.busy, 3)
+        if let f = faceStats {
+            readings["brightness"] = fixed(f.mean, 3)
+            readings["clipped"] = fixed(f.clipped, 3)
+            readings["backlight"] = fixed((imageStats?.mean ?? f.mean) - f.mean, 3)
+            readings["blur"] = fixed(f.laplacian, 5)
+        }
+        if let e = expression {
+            readings["smile"] = fixed(e.smile, 2)
+            readings["jawOpen"] = fixed(e.jawOpen, 2)
+            readings["blink"] = fixed(e.blinkMax, 2)
+            readings["browUp"] = fixed(e.browUp, 2)
+            readings["squint"] = fixed(e.squint, 2)
+            readings["eyeWide"] = fixed(e.eyeWide, 2)
+            readings["teeth"] = fixed(e.teeth, 2)
+        }
+        if let cm = cameraCm { readings["cameraCm"] = fixed(cm, 1) }
+        if let gates {
+            if let iris = expression?.irisPixels { readings["irisPx"] = fixed(iris * gates.originalScale, 1) }
+            if let eyes = gates.eyeSpacingOriginal { readings["eyeSpacingPx"] = fixed(eyes, 1) }
+            if let focal = gates.camera?.focal35mm { readings["focal35"] = fixed(focal, 1) }
+            readings["focalAssumed"] = focalAssumed ? 1 : 0
+            if let camera = gates.camera { readings["cameraData"] = camera.present ? 1 : 0 }
+        }
+        if let cover {
+            readings["coverHairline"] = fixed(cover.hairline, 2)
+            readings["coverJaw"] = fixed(cover.jaw, 2)
+            readings["coverFace"] = fixed(cover.face, 2)
+        }
+        self.readings = readings
 
         self.parts = parts
         self.filter = filter
@@ -2602,10 +2987,17 @@ struct MuseScore {
 
     /// For the console: the value, then every part, or the filter that zeroed it.
     var note: String {
-        let seen = labels.filter { $0.value >= 0.3 }.sorted { $0.value > $1.value }.prefix(2)
-            .map { String(format: "%@ %.2f", $0.key, $0.value) }.joined(separator: " ")
+        let top = labels.filter { $0.value >= 0.3 }.sorted { $0.value > $1.value }.prefix(2)
+        let seen = top.map { String(format: "%@ %.2f", $0.key, $0.value) }.joined(separator: " ")
         // In pieces: one literal this long is more than the type-checker will take.
         var extraParts: [String?] = [expression?.note, seen.isEmpty ? nil : "labels " + seen, handOnFace ? "hand on face" : nil]
+        // Cover labels the two above left out, so a hood or scarf is always on the line.
+        let coverSeen = labels.filter { label in Self.coverLabels.contains(label.key) && label.value >= Self.coverConfidence && !top.contains { $0.key == label.key } }
+            .sorted { $0.value > $1.value }.map { String(format: "%@ %.2f", $0.key, $0.value) }.joined(separator: " ")
+        extraParts.append(coverSeen.isEmpty ? nil : "labels " + coverSeen)
+        extraParts.append(cameraCm.map { String(format: "camera %.0fcm (%@%@)", $0, cameraFrom ?? "", focalAssumed ? ", focal assumed" : "") })
+        extraParts.append(cameraDetail.map { "meta " + $0 })
+        extraParts.append(cover?.note)
         extraParts.append(capped ? "cap ×\(Self.capMultiplier)" : nil)
         extraParts.append(String(format: "head yaw %.0f° pitch %.0f°", headDegrees.yaw, headDegrees.pitch))
         extraParts.append(tilted ? "tilted ×\(Self.tiltMultiplier)" : nil)
@@ -2637,6 +3029,7 @@ struct MuseScore {
         var fields: [String: Any] = [
             "scoreParts": Dictionary(parts.map { ($0.name, (Double($0.value) * 100).rounded() / 100) }) { _, last in last },
             "scorePenalties": penalties,
+            "scoreInputs": readings,
         ]
         if let filter { fields["scoreFilter"] = filter }
         return fields
@@ -2871,14 +3264,14 @@ struct ScanEval {
             let who = r.labelled ? "YOU" : "no "
             let score = r.distance.map { String(format: "%.3f", $0) } ?? "?"
             let kind = (r.type?.rawValue ?? "?").padding(toLength: 6, withPad: " ", startingAt: 0)
-            let bodySays = r.type == .front || r.type == .side
+            let bodySays = r.type == .front || r.type == .side || r.type == .threeQuarter
                 ? "sh \((r.body?.shoulderSpread.map { String(format: "%.2f", $0) } ?? "?").padding(toLength: 7, withPad: " ", startingAt: 0))"
                 : "          "
             return "  tile \(String(index + 1).padding(toLength: 3, withPad: " ", startingAt: 0)) \(who)  \(kind) d \(score)  \(bodySays)  \(r.fullRes == true ? "re-cropped" : "          ")  \(where_(r))"
         }
         // The shoulders decide the type; the head turn is logged beside them to see how
         // often it would have disagreed. Only full-length photos that reached scoring.
-        let fullLength = scored.filter { $0.type == .front || $0.type == .side }
+        let fullLength = scored.filter { $0.type == .front || $0.type == .side || $0.type == .threeQuarter }
         let typeCompared = fullLength.filter { $0.body?.shoulderSpread != nil }
         let typeDisagree = typeCompared.filter { r in
             r.metrics?.yaw.map { ViewController.headType(yaw: $0) != r.type } ?? false
@@ -3150,12 +3543,13 @@ struct BodyCheck {
             && (kneeDrop ?? 1) >= ViewController.minKneeDrop
     }
 
-    /// Enough of the body for the Muse: head to toe, or head to knee (see
-    /// `minKnees`). The web receives it as `isFullBody`.
-    var isHeadToToe: Bool { isHeadToAnkle || isHeadToKnee }
+    /// Enough of the body for the Muse: head to toe, or head to knee — see
+    /// `minKnees`. The name is what the web receives it as, `isFullBody`, and
+    /// what the gate has always been called in the logs.
+    var isHeadToToe: Bool { isHeadToAnkle || (ViewController.kneeLengthEnabled && isHeadToKnee) }
 
     /// In only on the knee rule — counted so the scan summary says how many.
-    var byKnees: Bool { !isHeadToAnkle && isHeadToKnee }
+    var byKnees: Bool { ViewController.kneeLengthEnabled && !isHeadToAnkle && isHeadToKnee }
 }
 
 /// Analyses produced during the scan, by asset id, so a tap is a lookup that agrees
@@ -3402,6 +3796,79 @@ enum Original {
             .map { $0.count }
     }
 
+    /// What the camera wrote about itself, for the v2 selfie gates: whether
+    /// there is any camera data at all (`noCameraDataGateEnabled`) and the
+    /// 35 mm-equivalent focal length (`tooCloseCm`).
+    struct Camera {
+        let present: Bool
+        let focal35mm: Float?
+        /// The lens's own focal length, present on a camera photo that carries
+        /// no 35 mm equivalent: the sensor size is unknown, so no distance is
+        /// read from it.
+        let focalMm: Float?
+        /// What the read saw, for the console: size, type, the fields found.
+        let detail: String
+    }
+    /// Read from the phone's copy of the original, with network access off: a
+    /// photo whose original is only in iCloud comes back nil, unknown, and is
+    /// not judged on its metadata. The whole file, up to `byteCap`: a HEIC cut
+    /// short loses its EXIF to ImageIO, and a local file of a few MB reads in
+    /// milliseconds. Bounded in time like the other reads.
+    static let headerTimeout: DispatchTimeInterval = .seconds(2)
+
+    static func camera(for asset: PHAsset) -> Camera? {
+        let resources = PHAssetResource.assetResources(for: asset)
+        guard let resource = resources.first(where: { $0.type == .fullSizePhoto })
+                ?? resources.first(where: { $0.type == .photo }) else { return nil }
+        let options = PHAssetResourceRequestOptions()
+        options.isNetworkAccessAllowed = false
+        let lock = NSLock()
+        var head = Data()
+        var complete = false
+        let done = DispatchSemaphore(value: 0)
+        let request = PHAssetResourceManager.default().requestData(
+            for: resource, options: options,
+            dataReceivedHandler: { chunk in
+                lock.lock(); defer { lock.unlock() }
+                guard head.count < byteCap else { return }
+                head.append(chunk)
+                if head.count >= byteCap { done.signal() }
+            },
+            completionHandler: { error in
+                lock.lock(); complete = error == nil; lock.unlock()
+                done.signal()
+            })
+        _ = done.wait(timeout: .now() + headerTimeout)
+        PHAssetResourceManager.default().cancelDataRequest(request)
+        lock.lock()
+        let bytes = head, whole = complete
+        lock.unlock()
+        let kind = (resource.uniformTypeIdentifier.split(separator: ".").last).map(String.init) ?? "?"
+        let size = "\(bytes.count / 1024)KB \(kind)\(whole ? "" : " partial")"
+        guard !bytes.isEmpty, let properties = properties(of: bytes, complete: whole) else { return nil }
+        let exif = properties[kCGImagePropertyExifDictionary] as? [CFString: Any]
+        let tiff = properties[kCGImagePropertyTIFFDictionary] as? [CFString: Any]
+        let focal35 = (exif?[kCGImagePropertyExifFocalLenIn35mmFilm] as? NSNumber)?.floatValue
+        let model = (tiff?[kCGImagePropertyTIFFModel] as? String) ?? (tiff?[kCGImagePropertyTIFFMake] as? String)
+        let focalMm = (exif?[kCGImagePropertyExifFocalLength] as? NSNumber)?.floatValue
+        let present = focal35 != nil || focalMm != nil || model != nil
+        var found: [String] = []
+        if let model { found.append(model) }
+        if let focal35 { found.append(String(format: "%.0fmm eq", focal35)) } else if let focalMm { found.append(String(format: "%.1fmm, no 35mm eq", focalMm)) }
+        if exif == nil && tiff == nil { found.append("no exif") }
+        return Camera(present: present, focal35mm: focal35, focalMm: focalMm, detail: "\(size): \(found.isEmpty ? "nothing" : found.joined(separator: ", "))")
+    }
+
+    /// The image properties ImageIO can read from the start of a file. Incremental
+    /// first, which is built for partial data; a plain source after it.
+    private static func properties(of bytes: Data, complete: Bool) -> [CFString: Any]? {
+        let source = CGImageSourceCreateIncremental(nil)
+        CGImageSourceUpdateData(source, bytes as CFData, complete)
+        if let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any] { return props }
+        guard let plain = CGImageSourceCreateWithData(bytes as CFData, [kCGImageSourceShouldCache: false] as CFDictionary) else { return nil }
+        return CGImageSourceCopyPropertiesAtIndex(plain, 0, nil) as? [CFString: Any]
+    }
+
     /// One streamed read, abandoned the moment the total crosses the cap, since
     /// `PHAssetResource` exposes no size.
     private static func read(_ asset: PHAsset,
@@ -3638,6 +4105,7 @@ extension ViewController {
             "captured": captured,
             "lowerBodyJoints": body.lowerJoints,
             "isFullBody": isFullBody,
+            "kneeUp": body.byKnees,
             // The web refuses the photo on this — the only way a photo from the flow's
             // own camera, which never passes the scan gate, is held to the same rule.
             "otherPeople": body.hasOthers,
@@ -3697,7 +4165,8 @@ extension ViewController {
     func classifyPhotoType(in image: UIImage, body: BodyCheck) -> PhotoType {
         guard let cgImage = image.cgImage else { return .unknown }
 
-        let faceRequest = VNDetectFaceRectanglesRequest()
+        // Landmarks, not just rectangles: the v2 selfie rule reads the eye spacing.
+        let faceRequest = VNDetectFaceLandmarksRequest()
 
         // The image's real orientation: at `.up` a rotated portrait is analysed
         // sideways, no face is found, and the web layer rejects the photo.
@@ -3716,11 +4185,12 @@ extension ViewController {
         // angle, but the number tells a head-on reference from a turned one.
         let yaw = face.yaw?.doubleValue
 
+        let eyeSpacing = Self.eyeSpacing(of: face, in: cgImage)
         let turn = yaw.map { String(format: "%.3f", $0) } ?? "n/a"
-        print("🔬 FACE \(String(format: "%.2f", ratio)) of frame, yaw \(turn), joints \(body.lowerJoints)/4, head to toe \(body.isHeadToToe)")
+        print("🔬 FACE \(String(format: "%.2f", ratio)) of frame, eyes \(eyeSpacing.map { String(format: "%.0f", $0) } ?? "?")px, yaw \(turn), joints \(body.lowerJoints)/4, head to toe \(body.isHeadToToe)")
 
         // The decision itself lives in one place, shared with the scan.
-        return Self.photoType(faceRatio: ratio, yaw: yaw, body: body)
+        return Self.photoType(faceRatio: ratio, eyeSpacing: eyeSpacing, yaw: yaw, body: body)
     }
 
     /// Base64 fallback for one photo the custom scheme could not load. Serial, so a
@@ -4218,8 +4688,8 @@ extension ViewController {
 
     /// What the Muse score needs for one matched photo: expression and labels from the
     /// head crop, a hand over the face, and the outfit. Well under 100ms together.
-    func museContext(face: VNFaceObservation, in image: CGImage, handler: VNImageRequestHandler)
-        -> (expression: FaceExpression?, labels: [String: Float], handOnFace: Bool, outfit: MuseScore.Outfit) {
+    func museContext(face: VNFaceObservation, in image: CGImage, handler: VNImageRequestHandler, readCover: Bool = false)
+        -> (expression: FaceExpression?, labels: [String: Float], handOnFace: Bool, outfit: MuseScore.Outfit, coverReader: (() -> FaceCover?)?) {
         let head = MuseScore.headBox(face.boundingBox)
         let w = CGFloat(image.width), h = CGFloat(image.height)
         let headRect = CGRect(x: head.minX * w, y: (1 - head.maxY) * h, width: head.width * w, height: head.height * h).integral
@@ -4230,12 +4700,24 @@ extension ViewController {
         let expressionGroup = DispatchGroup()
         var expressionResult: FaceExpression?
         var expressionMs = 0.0
+        // What covers the face — see `FaceCover`. Selfies only, on the same
+        // head crop with Vision's face box placed inside it. Handed to the
+        // score as a closure so it runs only when no cheaper gate has already
+        // dropped the photo: at about 200 ms a read it was most of the score's
+        // time on a library of test selfies.
+        var coverReader: (() -> FaceCover?)?
+        if readCover, let headCrop {
+            let faceRect = CGRect(x: face.boundingBox.minX * w, y: (1 - face.boundingBox.maxY) * h,
+                                  width: face.boundingBox.width * w, height: face.boundingBox.height * h)
+                .offsetBy(dx: -headRect.minX, dy: -headRect.minY)
+            coverReader = { [self] in timed("score.cover") { FaceCover.read(headCrop: headCrop, face: faceRect) } }
+        }
         if let headCrop {
             let classify = VNClassifyImageRequest()
             timed("score.labels") { try? VNImageRequestHandler(cgImage: headCrop, orientation: .up, options: [:]).perform([classify]) }
             for result in classify.results ?? [] where result.confidence >= 0.1 {
                 let name = result.identifier
-                if name == "sunglasses" || name == "eyeglasses" || MuseScore.hatLabels.contains(name) { labels[name] = result.confidence }
+                if name == "sunglasses" || name == "eyeglasses" || MuseScore.hatLabels.contains(name) || MuseScore.coverLabels.contains(name) { labels[name] = result.confidence }
             }
             if Self.scoreInParallel {
                 // MediaPipe on the CPU while Vision takes the Neural Engine: the two
@@ -4262,7 +4744,7 @@ extension ViewController {
                 try? VNImageRequestHandler(cgImage: crop, orientation: .up, options: [:]).perform([hands])
                 zone = zoneInCrop
             } else {
-        try? handler.perform([hands])
+                try? handler.perform([hands])
             }
         }
         let handOnFace = (hands.results ?? []).contains { hand in
@@ -4293,7 +4775,7 @@ extension ViewController {
             expression = expressionResult
             stageMs["score.expression", default: 0] += expressionMs
         }
-        return (expression, labels, handOnFace, MuseScore.Outfit(label: dressyLabel, dressy: dressy, busy: busy))
+        return (expression, labels, handOnFace, MuseScore.Outfit(label: dressyLabel, dressy: dressy, busy: busy), coverReader)
     }
 
     func matchPerson(in image: UIImage, asset: PHAsset) -> PhotoOutcome {
@@ -4466,6 +4948,7 @@ extension ViewController {
                     let unchecked = BodyCheck(lowerJoints: 0, ankles: 0, headSeen: false, span: 0, footRoom: 0, people: 1,
                                               shoulderSpread: nil, hipSpread: nil)
                     let ratio = Self.faceRatio(boxWidth: faces.map(\.boundingBox.width).max() ?? 0, in: cgImage)
+                    lastEyeSpacing = nil
                     return .scored(distances: quick.distances, facePixels: Int(quick.faceWidth), body: unchecked,
                                    type: Self.photoType(faceRatio: ratio, yaw: faces.first?.yaw?.doubleValue, body: unchecked),
                                    profile: false, museScore: nil)
@@ -4485,7 +4968,20 @@ extension ViewController {
         }
 
         let faceRatio = Self.faceRatio(boxWidth: faces.map(\.boundingBox.width).max() ?? 0, in: cgImage)
-        let isSelfie = faceRatio >= Self.selfieFaceRatio
+        // Eye spacing of the widest face, for the v2 selfie rule and the summary.
+        // Only where it can matter: a photo with a lower-body joint in frame is
+        // never a selfie under v2, so its landmarks are not fetched.
+        let widestFace = faces.max { $0.boundingBox.width < $1.boundingBox.width }
+        // Measured on the scan's render, then scaled to the original's pixels,
+        // the scale the face floor and the spec use.
+        let originalScale = CGFloat(max(asset.pixelWidth, asset.pixelHeight)) / CGFloat(max(cgImage.width, cgImage.height))
+        let eyeSpacing = body.lowerJoints == 0
+            ? timed("type.eyes") { Self.eyeSpacing(of: widestFace, in: cgImage, handler: handler) }.map { $0 * originalScale }
+            : nil
+        lastEyeSpacing = eyeSpacing
+        // The same rule as `photoType`, read before the body retry: under v2 a
+        // photo with a lower-body joint in frame is never a selfie.
+        let isSelfie = Self.photoType(faceRatio: faceRatio, eyeSpacing: eyeSpacing, yaw: nil, body: body) == .selfie
         if Self.requireFullBody && !isSelfie && !body.isHeadToToe {
             // Legs seen but not enough of them: one more look at the larger render,
             // only when the face already matches, so strangers cost nothing extra.
@@ -4506,7 +5002,7 @@ extension ViewController {
         // Free: the ratio, the body check and `yaw` are already in hand from the
         // match gates, so nothing is recomputed.
         let yaw = faces.first?.yaw?.doubleValue
-        let type = Self.photoType(faceRatio: faceRatio, yaw: yaw, body: body)
+        let type = Self.photoType(faceRatio: faceRatio, eyeSpacing: eyeSpacing, yaw: yaw, body: body)
         // The shoulders must have said side — a side by head turn alone does not count.
         let profile = type == .side && body.bodyFacing == .side && abs(yaw ?? 0) > Self.profileYaw
 
@@ -4529,10 +5025,20 @@ extension ViewController {
         var museScore: MuseScore?
         if (scored.distances.min() ?? 1) < Self.matchThreshold {
             museScore = timed("score") {
-                let context = museContext(face: faces[0], in: cgImage, handler: handler)
+                let context = museContext(face: faces[0], in: cgImage, handler: handler, readCover: Self.coverReadEnabled && type == .selfie)
+                // The v2 selfie gates' inputs — see `selfieGatesV2`. The camera
+                // data comes from the first bytes of the original on the phone.
+                var gates: MuseScore.SelfieGates?
+                if Self.selfieGatesV2, type == .selfie {
+                    let camera = timed("score.camera") { Original.camera(for: asset) }
+                    gates = MuseScore.SelfieGates(eyeSpacingOriginal: eyeSpacing.map { Float($0) },
+                                                  originalScale: Float(originalScale),
+                                                  originalLongSide: Float(max(asset.pixelWidth, asset.pixelHeight)),
+                                                  camera: camera)
+                }
                 return timed("score.terms") { MuseScore(face: faces[0], in: cgImage, handler: handler, faceWidth: widest,
                                                          expression: context.expression, labels: context.labels, handOnFace: context.handOnFace,
-                                                         outfit: context.outfit, selfie: type == .selfie) }
+                                                         outfit: context.outfit, selfie: type == .selfie, gates: gates, coverReader: context.coverReader) }
             }
         }
         return .scored(distances: scored.distances, facePixels: Int(scored.faceWidth), body: body, type: type, profile: profile, museScore: museScore)

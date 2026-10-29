@@ -35,7 +35,18 @@ final class ScanStore {
     /// Bump when a rule that feeds a stored verdict changes — the face floor, the
     /// group rules, the body gates, the Muse filters — so old records are ignored
     /// and the next scan rebuilds them.
-    static let rulesVersion = 1
+    /// 2: the v2 type sort (29 Oct 2026) — a portrait with a smaller face can
+    /// now be a selfie where it was "not head to toe" before.
+    /// 3: the v2 selfie gates (29 Oct 2026) — an "unusable face" verdict now
+    /// comes from more rules, and the ones written while they were being
+    /// tuned are not to be trusted.
+    /// 4: a smile showing teeth stays in (`smileKeepsTeeth`), so verdicts that
+    /// gated one are stale.
+    /// 5: the covered-face gates (`coverGatesEnabled`) — a capped selfie is
+    /// now out where it ranked low.
+    /// 6: the jaw limit rose to 0.4 (`coverJawLimit`): a bare jaw over a polo
+    /// collar read 0.33 and was gated.
+    static let rulesVersion = 6
 
     enum Verdict: String, Codable {
         /// Decided from the photo alone; the selfie plays no part.

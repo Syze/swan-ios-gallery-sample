@@ -40,6 +40,11 @@ struct FaceExpression {
     let gazeUp: Float
     let gazeDown: Float
     let gazeSide: Float
+    /// Iris diameter in the crop's pixels, the mean of the two irises from the
+    /// landmarker's iris points (468–477). Every iris is about 11.7 mm across,
+    /// so with the camera's focal length this gives the distance to the face —
+    /// the v2 "too close" gate. Nil when the model gave no iris points.
+    let irisPixels: Float?
     let ms: Int
 
     /// The more open eye: a wink leaves one eye open and scores low here while
@@ -103,6 +108,15 @@ struct FaceExpression {
             if let name = category.categoryName { values[name] = category.score }
         }
         func value(_ name: String) -> Float { values[name] ?? 0 }
+        // Iris width: the outer two of each iris's four rim points, in pixels.
+        var irisPixels: Float?
+        if let points = result.faceLandmarks.first, points.count >= 478 {
+            let w = Float(headCrop.width), h = Float(headCrop.height)
+            func across(_ a: Int, _ b: Int) -> Float {
+                hypot((points[a].x - points[b].x) * w, (points[a].y - points[b].y) * h)
+            }
+            irisPixels = (across(469, 471) + across(474, 476)) / 2
+        }
         return FaceExpression(
             smile: (value("mouthSmileLeft") + value("mouthSmileRight")) / 2,
             jawOpen: value("jawOpen"),
@@ -117,6 +131,7 @@ struct FaceExpression {
             gazeDown: (value("eyeLookDownLeft") + value("eyeLookDownRight")) / 2,
             gazeSide: max((value("eyeLookInLeft") + value("eyeLookOutRight")) / 2,
                           (value("eyeLookOutLeft") + value("eyeLookInRight")) / 2),
+            irisPixels: irisPixels,
             ms: Int(Date().timeIntervalSince(started) * 1000))
     }
 }
