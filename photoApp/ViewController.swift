@@ -637,6 +637,17 @@ final class ViewController: UIViewController {
 
     /// One POST of the report as JSON — see `scanReportURL`.
     private func postScanReport(_ report: [String: Any], to url: URL) {
+        // A reading that is NaN or infinite has no JSON form and would fail the
+        // whole report: it goes as null instead.
+        // Every other value goes as it is, so true and false stay booleans.
+        func clean(_ value: Any) -> Any {
+            if let dict = value as? [String: Any] { return dict.mapValues(clean) }
+            if let list = value as? [Any] { return list.map(clean) }
+            if let d = value as? Double, !d.isFinite { return NSNull() }
+            if let f = value as? Float, !f.isFinite { return NSNull() }
+            return value
+        }
+        let report = (clean(report) as? [String: Any]) ?? [:]
         let photos = report["photos"] as? [[String: Any]] ?? []
         guard JSONSerialization.isValidJSONObject(report),
               let body = try? JSONSerialization.data(withJSONObject: report, options: [.sortedKeys]) else {
@@ -1300,6 +1311,21 @@ extension ViewController {
     /// 45 cm, and at 45 an arm's-length selfie at 30–35 cm lost Tier A on
     /// distance alone. Zero stays at 25 cm, the too-close gate.
     static let poseDistance: (good: Float, bad: Float) = (40, 25)
+    /// The v2 selfie gate and pose group read the head's pitch from MediaPipe's
+    /// face transform (`FaceExpression.headPitch`) instead of Vision's
+    /// (agreed 31 Oct 2026). On three libraries Vision read 8 to 14 degrees on
+    /// selfies MediaPipe and the eye put level (one read 9.0 against 3.6),
+    /// and Vision has no sign, so a camera above and below read alike. Off,
+    /// or without a MediaPipe reading: Vision's pitch, as before.
+    static let mediaPipePitchEnabled = true
+    /// A camera below the face: MediaPipe's pitch is positive when the camera
+    /// looks up at the face. From `cameraBelowFrom` degrees the pose group is
+    /// capped at `cameraBelowCap`. Measured 31 Oct 2026 on a labelled set:
+    /// eye level -1.6, above -3.8 and -7.3, below with the head level +1.2,
+    /// +2.3 and +14.2; a head tipped down toward a low phone reads level or
+    /// above (-6.9) and is not caught. Nil turns it off.
+    static let cameraBelowFrom: Float? = 2
+    static let cameraBelowCap: Float = 0.6
     /// Light: the brighter half of the face over the darker half; the face
     /// over the whole frame (backlight); the share of blown-out face pixels.
     /// Bright only (30 Oct 2026): the face box takes in hair, beard and a
@@ -1316,6 +1342,11 @@ extension ViewController {
     /// 0.29 and 0.30 and dropped to Tier B.
     static let puckerLimit: Float = 0.6
     static let frownLimit: Float = 0.25
+    /// A frown's cap on expression: 0.6, the value on the client's test
+    /// sheets (agreed 31 Oct 2026), where the other caps stay at
+    /// `expressionCapped`. Measured on three libraries: it moves only selfies
+    /// whose sole expression cap is a frown, by about 3 percent of T.
+    static let frownCap: Float = 0.6
     /// Eyes held wide or raised brows cap expression and send `wideEyes`: the
     /// page pre-selects such a selfie only when no other Tier A selfie is
     /// left (agreed 30 Oct 2026). The eyes-wide reading counts from this line, lower than the 1.3.x
@@ -3450,8 +3481,11 @@ struct MuseScore {
         var cameraFrom: String?
         var focalAssumed = false
         var cover: FaceCover?
+        // The pitch the v2 selfie rules read — see `mediaPipePitchEnabled`.
+        let signedPitch: Float? = ViewController.mediaPipePitchEnabled ? expression?.headPitch : nil
+        let selfiePitch = signedPitch.map { abs($0) } ?? pitch
         if let gates {
-            if pitch > ViewController.gatePitchDegrees { filter = filter ?? "head pitched" }
+            if selfiePitch > ViewController.gatePitchDegrees { filter = filter ?? "head pitched" }
             if yaw > ViewController.gateYawDegrees { filter = filter ?? "head turned" }
             // The jaw gates every face; the teeth only one that is not smiling —
             // see `smileKeepsTeeth`.
@@ -3620,11 +3654,14 @@ struct MuseScore {
                 return low.value
             }
             var poseSignals: [(String, Float)] = [
-                (String(format: "pitch %.0f°", pitch), ramp(pitch, V.posePitch)),
+                (String(format: "pitch %.0f°", selfiePitch), ramp(selfiePitch, V.posePitch)),
                 (String(format: "yaw %.0f°", yaw), ramp(yaw, V.poseYaw)),
                 (String(format: "roll %.0f°", roll), ramp(roll, V.poseRoll)),
             ]
             if let cm = cameraCm { poseSignals.append((String(format: "camera %.0f cm", cm), ramp(cm, V.poseDistance))) }
+            if let below = V.cameraBelowFrom, let p = signedPitch, p >= below {
+                poseSignals.append((String(format: "camera below %+.0f°", p), V.cameraBelowCap))
+            }
             let poseGroup = lowest(poseSignals)
 
             var lightSignals: [(String, Float)] = []
@@ -3651,7 +3688,7 @@ struct MuseScore {
             if wideEyes { expressionSignals.append(("wide-eyed", V.expressionCapped)) }
             if let e = expression {
                 if e.pucker >= V.puckerLimit { expressionSignals.append((String(format: "pucker %.2f", e.pucker), V.expressionCapped)) }
-                if e.browDown >= V.frownLimit { expressionSignals.append((String(format: "frown %.2f", e.browDown), V.expressionCapped)) }
+                if e.browDown >= V.frownLimit { expressionSignals.append((String(format: "frown %.2f", e.browDown), V.frownCap)) }
             }
             let expressionGroup = lowest(expressionSignals)
 

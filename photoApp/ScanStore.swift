@@ -57,7 +57,9 @@ final class ScanStore {
     /// 11: the object rules (`BodyScore.furniture`, `objectAround`) — a front
     /// gated as "objects over the body" by a canopy or a sofa behind it is now
     /// scored, so those "unusable" verdicts are stale.
-    static let rulesVersion = 11
+    /// 12: the v2 selfie pitch gate reads MediaPipe's pitch
+    /// (`mediaPipePitchEnabled`) — "head pitched" verdicts are remade.
+    static let rulesVersion = 12
 
     enum Verdict: String, Codable {
         /// Decided from the photo alone; the selfie plays no part.
