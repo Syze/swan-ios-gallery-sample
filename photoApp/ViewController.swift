@@ -3546,6 +3546,14 @@ struct MuseScore {
             readings["funnel"] = fixed(e.funnel, 2)
             readings["press"] = fixed(e.press, 2)
             readings["browDown"] = fixed(e.browDown, 2)
+            // Logged only, for the camera-height signal — see `FaceExpression.faceRatio`.
+            readings["gazeUp"] = fixed(e.gazeUp, 2)
+            readings["gazeDown"] = fixed(e.gazeDown, 2)
+            readings["gazeSide"] = fixed(e.gazeSide, 2)
+            if let ratio = e.faceRatio { readings["faceRatio"] = fixed(ratio, 3) }
+            if let p = e.headPitch { readings["mpPitch"] = fixed(p, 1) }
+            if let y = e.headYaw { readings["mpYaw"] = fixed(y, 1) }
+            if let r = e.headRoll { readings["mpRoll"] = fixed(r, 1) }
         }
         if let cm = cameraCm { readings["cameraCm"] = fixed(cm, 1) }
         if let gates {

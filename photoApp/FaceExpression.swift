@@ -53,6 +53,18 @@ struct FaceExpression {
     let funnel: Float
     let press: Float
     let browDown: Float
+    /// Camera height, logged only (plan, item 3: "camera height, to set"). The
+    /// nose-to-brow length over the nose-to-chin length (landmarks 9, 1, 152):
+    /// a camera below the face shows the lower face larger, so the ratio falls.
+    /// One pair measured 30 Oct 2026: a selfie shot from below 0.72, one at eye
+    /// level 0.83. Nil without landmarks.
+    let faceRatio: Float?
+    /// The head's angle to the camera from the landmarker's face transform, in
+    /// degrees, signed — a second reading beside Vision's. Logged only. Nil
+    /// without the transform.
+    let headPitch: Float?
+    let headYaw: Float?
+    let headRoll: Float?
     let ms: Int
 
     /// The more open eye: a wink leaves one eye open and scores low here while
@@ -82,7 +94,7 @@ struct FaceExpression {
         options.runningMode = .image
         options.numFaces = 1
         options.outputFaceBlendshapes = true
-        options.outputFacialTransformationMatrixes = false
+        options.outputFacialTransformationMatrixes = true
         do {
             return try FaceLandmarker(options: options)
         } catch {
@@ -118,12 +130,25 @@ struct FaceExpression {
         func value(_ name: String) -> Float { values[name] ?? 0 }
         // Iris width: the outer two of each iris's four rim points, in pixels.
         var irisPixels: Float?
+        var faceRatio: Float?
         if let points = result.faceLandmarks.first, points.count >= 478 {
             let w = Float(headCrop.width), h = Float(headCrop.height)
             func across(_ a: Int, _ b: Int) -> Float {
                 hypot((points[a].x - points[b].x) * w, (points[a].y - points[b].y) * h)
             }
             irisPixels = (across(469, 471) + across(474, 476)) / 2
+            let lower = across(1, 152)
+            if lower > 0 { faceRatio = across(9, 1) / lower }
+        }
+        // Euler angles from the transform's rotation part, as MediaPipe's own
+        // samples read it.
+        var headPitch: Float?, headYaw: Float?, headRoll: Float?
+        if let m = result.facialTransformationMatrixes.first, m.rows >= 3, m.columns >= 3 {
+            let r = { (row: Int, column: Int) in m.value(atRow: UInt(row), column: UInt(column)) }
+            let degrees = { (radians: Float) in radians * 180 / .pi }
+            headPitch = degrees(atan2(r(2, 1), r(2, 2)))
+            headYaw = degrees(asin(max(-1, min(1, -r(2, 0)))))
+            headRoll = degrees(atan2(r(1, 0), r(0, 0)))
         }
         return FaceExpression(
             smile: (value("mouthSmileLeft") + value("mouthSmileRight")) / 2,
@@ -144,6 +169,10 @@ struct FaceExpression {
             funnel: value("mouthFunnel"),
             press: (value("mouthPressLeft") + value("mouthPressRight")) / 2,
             browDown: (value("browDownLeft") + value("browDownRight")) / 2,
+            faceRatio: faceRatio,
+            headPitch: headPitch,
+            headYaw: headYaw,
+            headRoll: headRoll,
             ms: Int(Date().timeIntervalSince(started) * 1000))
     }
 }
