@@ -34,9 +34,9 @@ struct FaceExpression {
     let teeth: Float
     /// Where the eyes point, from the eye-look blendshapes: up and down are
     /// the means of the two eyes, side is the stronger of the two sideways
-    /// pairs (left eye in + right eye out, or the reverse). Logged only: from a
-    /// flat photo these mix in head angle, lid position and face size, and on
-    /// four checked photos they did not match what the eyes were doing.
+    /// pairs (left eye in + right eye out, or the reverse). A level head with
+    /// the eyes raised or lowered reads here and nowhere else. Logged only;
+    /// no limit is set until real values have been seen.
     let gazeUp: Float
     let gazeDown: Float
     let gazeSide: Float
@@ -45,6 +45,14 @@ struct FaceExpression {
     /// so with the camera's focal length this gives the distance to the face —
     /// the v2 "too close" gate. Nil when the model gave no iris points.
     let irisPixels: Float?
+    /// Lips pushed forward (`mouthPucker`) and rounded (`mouthFunnel`); lips
+    /// pressed together, the mean of the two sides; brows pulled down (a
+    /// frown), the mean of the two sides. Read for the v2 selfie score's
+    /// expression group — see `ViewController.selfieScoreV2`.
+    let pucker: Float
+    let funnel: Float
+    let press: Float
+    let browDown: Float
     let ms: Int
 
     /// The more open eye: a wink leaves one eye open and scores low here while
@@ -54,7 +62,7 @@ struct FaceExpression {
     var blinkBoth: Float { min(blinkLeft, blinkRight) }
 
     var note: String {
-        String(format: "expr smile %.2f jaw %.2f blink %.2f/%.2f brow %.2f wide %.2f teeth %.2f gaze up %.2f down %.2f side %.2f (%dms)", smile, jawOpen, blinkLeft, blinkRight, browUp, eyeWide, teeth, gazeUp, gazeDown, gazeSide, ms)
+        String(format: "expr smile %.2f jaw %.2f blink %.2f/%.2f brow %.2f wide %.2f teeth %.2f pucker %.2f funnel %.2f press %.2f frown %.2f gaze up %.2f down %.2f side %.2f (%dms)", smile, jawOpen, blinkLeft, blinkRight, browUp, eyeWide, teeth, pucker, funnel, press, browDown, gazeUp, gazeDown, gazeSide, ms)
     }
 
     /// `face_landmarker.task` in the app bundle, float16 with blendshapes, 3.7 MB.
@@ -132,6 +140,10 @@ struct FaceExpression {
             gazeSide: max((value("eyeLookInLeft") + value("eyeLookOutRight")) / 2,
                           (value("eyeLookOutLeft") + value("eyeLookInRight")) / 2),
             irisPixels: irisPixels,
+            pucker: value("mouthPucker"),
+            funnel: value("mouthFunnel"),
+            press: (value("mouthPressLeft") + value("mouthPressRight")) / 2,
+            browDown: (value("browDownLeft") + value("browDownRight")) / 2,
             ms: Int(Date().timeIntervalSince(started) * 1000))
     }
 }

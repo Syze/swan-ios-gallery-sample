@@ -38,7 +38,11 @@ ones. Open it, add your keys, run it on a device.
 | `photoApp/ViewController.swift` | The controller: hosts the page, scans, matches, ranks, uploads. The part to copy into your app. |
 | `photoApp/FaceRecognition.swift` | Runs the face recognition model and compares faces. |
 | `photoApp/FaceExpression.swift` | Reads expression from a face crop with MediaPipe. |
-| `photoApp/FaceModels/` | The two models: the face matcher (Core ML package) and `face_landmarker.task`. Keep the package folder intact. |
+| `photoApp/FaceCover.swift` | Reads what covers a selfie's face, with MediaPipe. |
+| `photoApp/BodyScore.swift` | Scores a front or side photo on the body. |
+| `photoApp/BodyObjects.swift` | Finds bags, umbrellas, bicycles and furniture over the body, with MediaPipe. |
+| `photoApp/ScanStore.swift` | Keeps what the scan learned about each photo between scans, on the phone only. |
+| `photoApp/FaceModels/` | The four models: the face matcher (Core ML package), `face_landmarker.task`, `selfie_multiclass_256x256.tflite` and `efficientdet_lite0.tflite`. Keep the package folder intact. |
 | `photoApp/PrivacyInfo.xcprivacy` | Privacy manifest for the system APIs used. |
 | `photoApp/SwanSession.swift` | Sample sign-in: mints a session token from your keys. Replace with your own auth. |
 | `Podfile` | `MediaPipeTasksVision 0.10.21`. Rename the target to yours when copying. |
@@ -49,8 +53,9 @@ are a plain single-view app. Nothing in them is Swan-specific.
 
 ## Taking it into your app
 
-Copy the four Swift files, the `FaceModels` folder and the privacy manifest
-into your target, add the pod line to your Podfile, and present
+Copy the seven Swift files (`ViewController`, `FaceRecognition`,
+`FaceExpression`, `FaceCover`, `BodyScore`, `BodyObjects` and `ScanStore`),
+the `FaceModels` folder and the privacy manifest into your target, add the pod line to your Podfile, and present
 `ViewController` however your app navigates. Every callback the flow reports
 arrives in `COMPONENT_CALLBACK` in the controller; the handlers there print,
 replace them with your own handling.

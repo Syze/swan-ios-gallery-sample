@@ -335,6 +335,15 @@ its `of` come from the scan and stay as they are; an empty piece leaves no extra
 | `limitReachedText` | That's as many photos as we can take. |
 | `picksChoosingTitle` | Picking for you… |
 | `picksTitle` | Picked for you |
+| `pickedSubHeadingTitle` | The clearest photos of you we found. Your front and side photos stay; tap the selfie to swap it. |
+| `pickedPartialSubHeadingTitle` | We found {found} of {needed}. Still needed: {missing} — take it now, or pick one from the grid. |
+| `lockedPickNotice` | We keep this one — it's the clearest {shot} photo we found. |
+
+`pickedSubHeadingTitle` replaces `subHeadingTitle` once the scan has filled
+every slot and locked the front and side picks; `pickedPartialSubHeadingTitle`
+when it filled only some (`{found}` and `{needed}` are counts, `{missing}` the
+shots still needed, such as "1 front, 2 sides"). `lockedPickNotice` is the line
+shown when a locked front or side is tapped; `{shot}` is "front" or "side".
 
 `loadMoreButtonText` is one label for one idea, get me more photos: behind it
 the flow either reopens the system picker or searches further back, and
@@ -580,7 +589,10 @@ sentence with your own. See §4.
         "scanningStatusPostText": "",
         "limitReachedText": "That's as many photos as we can take.",
         "picksChoosingTitle": "Picking for you…",
-        "picksTitle": "Picked for you"
+        "picksTitle": "Picked for you",
+        "pickedSubHeadingTitle": "The clearest photos of you we found. Your front and side photos stay; tap the selfie to swap it.",
+        "pickedPartialSubHeadingTitle": "We found {found} of {needed}. Still needed: {missing} — take it now, or pick one from the grid.",
+        "lockedPickNotice": "We keep this one — it's the clearest {shot} photo we found."
       },
       "capturePage": {
         "headingTitle": "We need a few more photos.",

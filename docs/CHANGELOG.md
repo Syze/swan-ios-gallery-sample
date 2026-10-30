@@ -20,6 +20,174 @@ onwards; those entries are kept for reference and need nothing on your side.
 
 ---
 
+## [1.3.8] — 2026-10-30
+
+**Mobile iOS only.** **Controller: update required** for the new ranking. The
+page pre-selects selfies by the `tier` the controller sends and sorts the grid
+by its `order`; an older controller gets the 1.3.7 behaviour (ranking by
+`score`), and an older page ignores the new fields. The update replaces
+`ViewController.swift`, `FaceExpression.swift` and `ScanStore.swift`, and
+adds `BodyScore.swift`, `BodyObjects.swift` and the model
+`FaceModels/efficientdet_lite0.tflite` (4.6 MB, a member of the app target).
+The results store's rules version is 11, so the first scan after the update
+is a full one.
+
+### Added
+
+- **The v2 body score for fronts and sides (plan item 5).** Behind
+  `fullLengthScoreV2` in the controller, on. A matched front, three-quarter
+  or side is scored on the body, not the face: T = visibility^0.7 ×
+  openness^0.2 × quality^0.1, with visibility = 0.4 torso + 0.4 legs + 0.2
+  arms. Each region is read from Vision's person segmentation and the pose
+  joints: how close the outline sits to the body (torso width over the
+  shoulders and hips 1.05 to 1.35, thigh 0.45 to 0.70, shin 0.30 to 0.50
+  and arm 0.25 to 0.45 of the torso length), the contrast at the outline,
+  the light on the region and visible skin. Openness: sitting, leaning,
+  lying, crossed arms or ankles and hidden hands lower it. Quality: the
+  sharpness of the body. Tier A at 0.70 or more, Tier B down to 0.45
+  (`fullLengthUsableFloor`), unusable below. Gates: a body under 400 px
+  head to ankle, a blurred body, and objects over a quarter of the body.
+  The face filters (sunglasses, hand, closed eyes, smile, exposure) no
+  longer apply to these photos; the document gate does. A busy top
+  multiplies T by 0.8 (`fullLengthOutfitMultiplier`), and the tier follows
+  the final value. Messages: `score` is T, `tier` A or B, `usable` false
+  below the floor or gated, `scoreParts` torso, legs, arms, openness,
+  quality, and `scoreInputs` the readings behind them.
+
+- **Garment caps (plan item 5b).** Behind `garmentCapsEnabled`, on. Vision's
+  whole-photo labels, already read for every match, cap a region when a
+  garment hides its shape (`garmentCaps`): a suit or tuxedo at 0.4 or more,
+  or a lab coat (how a sherwani reads) at 0.3 or more, caps torso and arms
+  at 0.2; a suit at 0.22 or more caps them at 0.5; a gown, sari, kimono or
+  wedding dress at 0.3 caps the legs at 0.2; a hoodie at 0.5 caps the torso
+  at 0.5; a jacket at 0.6 caps torso and arms at 0.5. Measured on test
+  photos: a sherwani read lab coat 0.33 to 0.49 or suit about 0.5, a
+  bandhgala suit 0.24 to 0.36, plain clothes suit 0.21 or less. With
+  `fullLengthLabelLog` the console lists the labels over 0.2 per match.
+
+- **Objects over the body (plan item 5b).** Behind `objectReadEnabled`, on.
+  MediaPipe's EfficientDet-Lite0 object detector (`BodyObjects.swift`, in
+  the MediaPipe pod already shipped) finds handbags, backpacks, suitcases,
+  umbrellas, bicycles, motorcycles, chairs, benches and couches at 0.3
+  confidence or more. The share of each region's outline inside the boxes
+  lowers that region; 25 percent or more of the whole body
+  (`objectBodyGate`) makes the photo unusable. A box covering 90 percent or
+  more of the body (`objectAround`) is scenery around the person and is
+  ignored, and a chair, bench or couch counts only when the person is
+  sitting. About 25 to 30 ms per match on an iPhone.
+
+- **Outfit colour for the session rule (plan item 5c).** Each front and
+  side carries `outfit`: the CIELAB mean of the trunk and of the thighs.
+  The page takes a second front or side from the same session as the first
+  only when the outfit differs by a colour distance of 20 or more
+  (`PRESELECT_SESSION_OUTFIT_DE`); the same outfit in one session measured
+  under 10, different outfits 20 to 40.
+
+- **Pre-selected fronts and sides stay selected.** Behind
+  `LOCK_PRESELECTED_BODY` on the page, on. Tapping one shows a short notice
+  (`lockedPickNotice`) instead of deselecting it; the selfie can still be
+  swapped. The subtitle names what the scan found and what is still
+  needed (`pickedSubHeadingTitle`, `pickedPartialSubHeadingTitle`).
+
+- **Selfies first after the picks.** Behind `SELFIES_FIRST_AT_SCAN_END` on
+  the page, on. When the scan ends the grid shows the pre-selected photos,
+  then every other selfie, then the fronts and sides, each in its ranked
+  order.
+
+- **Documents gated (plan item 2c).** Behind `documentGateEnabled` in the
+  controller, on. A photographed ID card, passport or page with the shopper's
+  face on it is out (score 0, hidden) when Vision's classifier labels it
+  document-like (the document, printed page, handwriting, receipt, ticket,
+  screenshot and passport labels summed to 0.5 or more, or handwriting alone
+  at 0.3 or more), or when those labels reach 0.3 and Vision's document
+  detector finds a page under 90 percent of the frame with the face inside
+  it (`documentPageLabelLimit`, `documentPageAreaLimit`). Any match type.
+  `scoreFilter` gains `document`; `summary` gains `documentRead`,
+  `documentLabelled`, `handwritten`, `faceOnPage`, `faceOnDocument` and
+  `textHeavy`. Measured on three libraries: five IDs and passports caught
+  (labels 0.40 to 1.73), clean photos read 0.16 or less, and the two photos
+  the labels put at 0.37 with no page found were confirmed not to be
+  documents and stay in.
+
+- **The v2 selfie score (plan item 3).** Behind `selfieScoreV2` in the
+  controller, on. A selfie that passed the gates scores T, 0 to 1: six
+  groups, each the lowest of its signals, combined by a weighted geometric
+  mean (pose 0.30, light 0.20, gaze 0.15, expression 0.15, visibility 0.10,
+  detail 0.10), each signal a straight line from 1 at its tolerance to 0 at
+  its limit. Pose: pitch 3° to 15°, yaw 5° to 20°, roll 5° to 20°, camera
+  40 cm to 25 cm. Light: the brighter half of the face over the darker 1.3×
+  to 2.0×, the face over the whole frame 0.8 to 0.4, blown-out face pixels
+  1 to 5 percent, a colour cast. Expression: a closed smile, eyes held wide
+  or brows raised (the eyes-wide reading from 0.05), pursed lips (0.6 or
+  more) and a frown (0.25 or more) each cap the group at 0.5, an open smile
+  at 0.4. Visibility: the face oval's visible share 95 to 85 percent,
+  glasses cap it at 0.85. Detail: sharpness, and eye spacing 120 to 60 px in
+  the original. Gaze and camera height score 1 until measured. T at 0.70 or
+  more is Tier A, except a selfie whose eyes are under 90 px apart
+  (`tierAEyeSpacingMin`), which is Tier B whatever its T. The 1.3.x parts,
+  bands and multipliers no longer apply to selfies; fronts and sides have
+  the body score below. `onGalleryMatchFound` gains `tier` (`A` or `B`)
+  and `wideEyes`; for a selfie `scoreParts` is the six groups and
+  `scorePenalties` is left out; `scoreInputs` gains `pucker`, `funnel`,
+  `press` and `browDown` from the expression model. The page pre-selects a
+  selfie from Tier A only (`PRESELECT_TIER_A_SELFIES_ONLY`), a wide-eyed
+  one only when no other is left (`PRESELECT_WIDE_EYES_LAST`), and allows
+  a repeat of a picked shot once no fresh Tier A selfie is left; a Tier B
+  selfie stays in the grid for the user. Measured on three libraries (124,
+  3,039 and 3,544 photos): 8 of 16, 13 of 22 and 6 of 7 selfies in Tier A;
+  the pick was the top neutral Tier A selfie each time; the client's
+  reported pursed-lip selfie is Tier B on the camera distance.
+
+- **Ordering (plan item 4).** Behind `orderV2Enabled` in the controller, on.
+  Each match carries `order`, which the page uses for the grid and the
+  pre-selection in place of `score` (the badge keeps showing `score`). Tier
+  A sends 1 + R, Tier B sends T, so Tier A photos come first and Tier B keep
+  their order after them. For a selfie R = 0.45 T + 0.40 P + 0.15 recency,
+  with recency 1 up to 12 months and 0 from 36, and P = 0.7 × 0.5 (no
+  aesthetic score yet) + 0.3 × the person's own choices (a favourite 0.5,
+  edited 0.25, their pick from a burst 0.25, capped at 1); for a front or
+  side R = 0.8 T + 0.2 recency, with recency 1 up to 6 months and 0 from
+  24. A front or side takes its tier from the body score. The match also
+  carries `takenAt` (capture time, ms since 1970): the page takes the second
+  front and the second side from a different session, at least an hour from
+  the first (`PRESELECT_SESSION_GAP_MS`), or from the same session in a
+  different outfit; only a usable photo at or over the floor
+  (`PRESELECT_FULL_LENGTH_FLOOR`, 0.45) is chosen, and with none the slot
+  stays short. `PRESELECT_SESSION_WEAK`, the face-based fallback for an
+  older controller, is off.
+  Measured on three libraries: the second front came from another session
+  on each; a favourite moved a selfie up by 0.06 as the formula says.
+
+- **Own photos kept through the gap rule.** Behind `ownPhotoKeepEnabled` in
+  the controller, on. A match the gap rule or the weak-reference cut would
+  withdraw stays when its face is under 0.48 (`ownPhotoKeepLimit`) from the
+  nearest sure match, a shown match under 0.40 to the selfie
+  (`ownPhotoCore`). Photos of one person sit closer to each other than to a
+  quick selfie: on three libraries, with the owners naming each photo, own
+  borderline photos sat 0.15 to 0.47 from their sure matches and other
+  people 0.50 and over. `summary` gains `ownKept`. With
+  `ownPhotoLogEnabled` the console shows each borderline face's nearest
+  distance to the sure matches and the capture date of every photo the gap
+  rule touches.
+
+- **Review aids on the page.** Each tile shows the first 8 characters of its
+  photo id (`SHOW_ID_BADGE`), the `id=` the controller prints on every MATCH
+  line, next to the score badge (`SHOW_SCORE_BADGE`). Both are for the
+  review build and off for a release to shoppers.
+
+### Changed
+
+- **Light counts blown-out pixels only** in the v2 selfie score. Counting
+  black pixels too zeroed well-lit selfies with dark hair, a beard or a night
+  background (6 to 15 percent "clipped" on two libraries).
+  `scoreInputs.clipped` is unchanged.
+
+- **Camera data is read from the original**, not the edited copy, so an
+  edited selfie is not gated for missing metadata when the edit dropped it.
+  This is what moved the results store to rules version 9.
+
+---
+
 ## [1.3.7] — 2026-10-29
 
 **Mobile iOS only.** **Controller: update recommended.** Older controllers

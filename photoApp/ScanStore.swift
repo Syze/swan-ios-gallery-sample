@@ -46,7 +46,18 @@ final class ScanStore {
     /// now out where it ranked low.
     /// 6: the jaw limit rose to 0.4 (`coverJawLimit`): a bare jaw over a polo
     /// collar read 0.33 and was gated.
-    static let rulesVersion = 6
+    /// 7: the document gate (`documentGateEnabled`) — a photographed ID card
+    /// or passport was a match before and is now out.
+    /// 8: the document gate's second rule (`documentPageLabelLimit`) — a
+    /// document the labels only half see is now out.
+    /// 9: camera data is read from the original, not the edited copy — an
+    /// edited selfie that failed the no-camera-data gate may now pass.
+    /// 10: the v2 full-length score (`fullLengthScoreV2`) — the face filters no
+    /// longer drop a front or side, so verdicts of "unusable" must be remade.
+    /// 11: the object rules (`BodyScore.furniture`, `objectAround`) — a front
+    /// gated as "objects over the body" by a canopy or a sofa behind it is now
+    /// scored, so those "unusable" verdicts are stale.
+    static let rulesVersion = 11
 
     enum Verdict: String, Codable {
         /// Decided from the photo alone; the selfie plays no part.

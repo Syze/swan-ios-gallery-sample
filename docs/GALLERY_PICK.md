@@ -77,8 +77,10 @@ Intro ─> Gender* ─> Height** ─> Selfie ─> Searching ─┬─> Picker �
 6. **Picker** — the grid fills as the scan runs. When it ends, the top-ranked
    photo of each type the Muse needs, **1 selfie, 2 front, 2 side**, is
    selected and moved to the front of the grid, ticked (fewer when the library
-   is short of a type), chosen from the verdicts the host sent with the
-   matches; the rest of the grid follows by the host's `score`, best first.
+   is short of a type: a selfie only from Tier A, the second front and side
+   only from a different session), chosen from the verdicts the host sent
+   with the matches; the rest of the grid follows by the host's `order`
+   (its `score` from an older host), best first.
    That is the one moment tiles move. The user can change any of
    them; a coverage row tracks what the selection still needs. Front and side
    shots must be full length; a selfie is exempt. Nothing uploads until Build
@@ -556,7 +558,7 @@ iOS for more library photos has to keep it.
 | Message | Payload |
 |---|---|
 | `RENDER_COMPONENT` | `{ componentName: "GalleryPick", props: { … } }` — see [Rendering the component](#rendering-the-component) |
-| `onGalleryMatchFound` | `{ assetId, type, isFullBody, kneeUp?, distance?, score?, scoreParts?, scorePenalties?, scoreFilter?, scoreInputs?, dupGroup?, done, total }` — `type` is `selfie`, `front`, `side` or `three-quarter` (a body turned 30° to 45°, which fills a side slot; from hosts with the v2 sort); `kneeUp` is true for a head-to-knee photo, which the picker pre-selects only when no head-to-toe photo is left for the slot (the current controller's knee rule is off, so it sends none); `distance` is the host's match distance, lower is closer; `score` is the host's ranking of the photo for the Muse, higher is better, with clean faces at 0.5 and above and demoted ones below; `dupGroup` is shared by photos that repeat one shot. The picker pre-selects the top-ranked photo of each type, one per `dupGroup` unless every photo of a new shot scores under 0.5: by `score` when sent, else the closest by `distance`, else the newest. Analytics only, sent with `score`: `scoreParts` is each signal 0–1 (`quality`, `pose`, `light`, `size`, `mouth`, `eyes`, `brow`, `sharp`), `scorePenalties` lists what pulled the score down (`cap`, `tilted`, `closed smile`, `open smile`, `wide-eyed`, `mouth open`, `exposure`, `dressy`, `busy`; empty when none), `scoreFilter` is what set it to 0 (`sunglasses`, `hand over face`, `face cut by the frame`, `blurred`, `eyes closed`, `one eye closed`; for a selfie also `head pitched`, `head turned`, `mouth open`, `teeth showing`, `exposure`, `too close`, `no camera data`, `cap or hat`, `hairline covered`, `jaw covered`, `face covered`), and `scoreInputs` is the raw readings the parts were worked out from (`yaw`, `pitch`, `roll` in degrees, `faceWidth` in pixels, `quality`, `brightness`, `clipped`, `backlight`, `blur`, `smile`, `jawOpen`, `blink`, `browUp`, `squint`, `eyeWide`, `teeth`, `sunglasses`, `cap`, `handOnFace`, `dressy`, `busy`; for a selfie also `cameraCm`, `irisPx`, `eyeSpacingPx` in the original's pixels, `focal35` in mm equivalent, `focalAssumed` and `cameraData` as 1 or 0, and `coverHairline`, `coverJaw`, `coverFace` 0–1 when the segmenter read the photo). The page passes them on in `onImageSelect`, and sends the selected photos' details to Swan's analytics (no photo ids, no images). |
+| `onGalleryMatchFound` | `{ assetId, type, isFullBody, kneeUp?, distance?, score?, tier?, usable?, outfit?, wideEyes?, order?, takenAt?, scoreParts?, scorePenalties?, scoreFilter?, scoreInputs?, dupGroup?, done, total }` — `type` is `selfie`, `front`, `side` or `three-quarter` (a body turned 30° to 45°, which fills a side slot; from hosts with the v2 sort); `kneeUp` is true for a head-to-knee photo, which the picker pre-selects only when no head-to-toe photo is left for the slot (the current controller's knee rule is off, so it sends none); `distance` is the host's match distance, lower is closer; `score` is the host's ranking of the photo for the Muse, higher is better: for a selfie the v2 score T (0–1, see GALLERY_PICK_SCORE.md), for a front, three-quarter or side the body score T (0–1, see GALLERY_PICK_SCORE.md), 0 when gated; `tier` is `A` or `B` on a selfie (Tier A at 0.70 and over, also Tier B when the eyes are under 90 px apart in the original) and on a front or side (Tier A at 0.70 and over, Tier B from 0.45), left out on a front or side under 0.45 or gated; `usable` (fronts and sides) is false under 0.45 or when gated, and the picker never pre-selects such a photo; `outfit` (fronts and sides) is `{ torso, legs }`, each the CIELAB mean `[L, a, b]` of that part of the clothing, either missing when it could not be read; `wideEyes` is true on a selfie with the eyes held wide or the brows raised; `order` is the host's order for the grid and the pre-selection, higher first: Tier A above every Tier B, and within Tier A the score with recency and, for selfies, the person's own choices (favourite, edited, kept from a burst); `takenAt` is the capture time in ms since 1970; `dupGroup` is shared by photos that repeat one shot. The picker sorts the grid by `order` when every photo carries it, else by `score`. It pre-selects the top photo of each type, one per `dupGroup`: a selfie from Tier A only, a selfie marked `wideEyes` only when no other is left, a front or side only at `score` 0.45 or more and not marked `usable: false`, and the second front and the second side from a different session (at least an hour from the first by `takenAt`) or from the same session when the `outfit` colours differ by 20 or more; with none the slot stays empty. Once picked, a front or side stays selected, and a tap shows a short notice instead; a repeat of a shot already picked only when every photo of a new shot scores under 0.5 (fronts and sides) or no fresh Tier A selfie is left. Without `order`, `tier` or `takenAt` (an older host) it ranks by `score`, else the closest by `distance`, else the newest. Analytics only, sent with `score`: `scoreParts` is each signal 0–1 (for a selfie the six v2 groups `pose`, `light`, `gaze`, `expression`, `visibility`, `detail`; for a front or side `torso`, `legs`, `arms`, `openness`, `quality`), `scorePenalties` is sent only by a controller with the v2 scores switched off, `scoreFilter` is what set it to 0 (for a front or side `body under 400 px`, `blurred body`, `objects over N% of the body`, `document`; for a selfie `sunglasses`, `hand over face`, `face cut by the frame`, `blurred`, `eyes closed`, `one eye closed`, `document`, `head pitched`, `head turned`, `mouth open`, `teeth showing`, `exposure`, `too close`, `no camera data`, `cap or hat`, `hairline covered`, `jaw covered`, `face covered`), and `scoreInputs` is the raw readings the parts were worked out from (`yaw`, `pitch`, `roll` in degrees, `faceWidth` in pixels, `quality`, `brightness`, `clipped`, `backlight`, `blur`, `smile`, `jawOpen`, `blink`, `browUp`, `squint`, `eyeWide`, `teeth`, `pucker`, `funnel`, `press`, `browDown`, `sunglasses`, `cap`, `handOnFace`, `dressy`, `busy`; for a front or side also the body readings: `torsoRatio`, `thighL`/`thighR`, `shinL`/`shinR`, `armWidth`, per region `torsoFit`, `torsoOutline`, `torsoLight`, `torsoSkin` and the same for `legs` and `arms`, `capTorso`, `capLegs`, `capArms` when a garment capped a region, `objTorso`, `objLegs`, `objArms`, `objBody` as the share under objects, `kneeDrop`, `thighTilt`, `kneeAngle`, `torsoTilt`, `sitting`, `armsCrossed`, `handsHidden`, `legsCrossed`, `sharpness`, `bodyPx`; for a selfie also `cameraCm`, `irisPx`, `eyeSpacingPx` in the original's pixels, `focal35` in mm equivalent, `focalAssumed` and `cameraData` as 1 or 0, and `coverHairline`, `coverJaw`, `coverFace` 0–1 when the segmenter read the photo). The page passes them on in `onImageSelect`, and sends the selected photos' details to Swan's analytics (no photo ids, no images). |
 | `onGalleryScanProgress` | `{ done, total }` |
 | `onGalleryScanComplete` | `{ assetIds, dropped?, limited?, denied?, error?, skipped?, summary? }` — `dropped` names matches the host withdrew once the whole pass was scored; the page removes those tiles if it ever showed them. A host holds borderline matches back rather than streaming them, so in practice `assetIds` only adds tiles, appended after the streamed ones, and `dropped` names ids the page never saw. Absent from hosts that predate it. `skipped` is `{ inCloud, cloudSelfies, cloudFullLength, cloudDownloaded, cloudLeft, noImage }`, counts of what the scan could not look at (photos only in iCloud, how many of those looked like a selfie or a full-length photo from their thumbnail, how many were downloaded in full after a small copy confirmed one person, how many were left by the cap or still downloading when the wait after the local scan ran out). `summary` is the scan's whole tally as numbers: photos examined, each gate's count (no face, group, other people, face too small, not full body, no match, sensitive, unusable face, too large), the matcher's name and cut-off, the closest rejected distance and near misses, matches by type, the selfie frames chosen from, and timings. Counts only, no ids. Both are reported to analytics only; nothing is shown to the user. |
 | `onGalleryPhotoAnalysis` | `{ assetId, type, isFullBody, captured? }` |
@@ -1058,6 +1060,49 @@ Every release has its own address, for example
 - **The page reports its version** in the `WEB_READY` message (`version`), and the
   reference host logs it.
 - **Each release says whether `ViewController.swift` needs updating.**
+
+### 1.3.8 — 30 October 2026
+
+**Controller:** update required for the new ranking. Older controllers keep
+working and get the 1.3.7 ranking; an older page ignores the new fields. The
+update replaces `ViewController.swift`, `FaceExpression.swift` and
+`ScanStore.swift`, and adds `BodyScore.swift`, `BodyObjects.swift` and a
+4.6 MB model file (`FaceModels/efficientdet_lite0.tflite`) to the app target.
+The first scan after the update is a full one.
+
+**Flow**
+
+- Selfies get the v2 score: head pose and camera distance, light, gaze,
+  expression, how much of the face shows, and detail. Tier A at 0.70 and
+  over. Only a Tier A selfie is pre-selected; a wide-eyed one only when no
+  other is left.
+- Front and side photos are scored on the body, not the face: how well the
+  clothes show the torso, legs and arms, the pose and the sharpness. A suit,
+  sherwani, gown or sari, a loose top, or a bag or umbrella over the body
+  ranks lower; objects over a quarter of the body make the photo unusable.
+  Sunglasses, a smile or closed eyes no longer rule out a full-length photo.
+  Tier A at 0.70, usable from 0.45.
+- The grid is ordered Tier A first, newer photos and the shopper's
+  favourites ahead within it. When the scan ends: the picks, then the other
+  selfies, then the fronts and sides.
+- The second front and side come from another session, at least an hour
+  away, or from the same session in a clearly different outfit.
+- Pre-selected fronts and sides stay selected; a tap shows a short message.
+  The selfie can be swapped. The subtitle says what was found and what is
+  still needed.
+- A photographed ID card, passport or page with the shopper's face is left
+  out.
+- A borderline match that looks like the shopper's other photos is kept.
+
+**Setup**
+
+- `onGalleryMatchFound` gains `tier`, `usable`, `outfit`, `wideEyes`,
+  `order` and `takenAt`; `scoreParts`, `scoreInputs` and `scoreFilter` carry
+  the v2 values. See the table above.
+- New text keys: `pickedSubHeadingTitle`, `pickedPartialSubHeadingTitle`
+  and `lockedPickNotice` (GALLERY_PICK_TEXT_CONFIG.md).
+- `summary` gains `documentRead`, `documentLabelled`, `handwritten`,
+  `faceOnPage`, `faceOnDocument`, `textHeavy` and `ownKept`.
 
 ### 1.3.7 — 29 October 2026
 

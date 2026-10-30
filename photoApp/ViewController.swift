@@ -1,6 +1,6 @@
 
 
-// Swan Gallery Pick host — pairs with Swan mobile 1.3.7. Release notes and
+// Swan Gallery Pick host — pairs with Swan mobile 1.3.8. Release notes and
 // whether this file needs updating: CHANGELOG.md.
 
 import UIKit
@@ -15,7 +15,7 @@ final class ViewController: UIViewController {
 
     /// Where the SDK bundle is served from. Must be **https** — getUserMedia needs
     /// a secure context, so an http or file:// URL gives no camera.
-    let sdkURL = URL(string: "https://swan-mobile-web-component.swan.so/v1.3.7/index.html")!
+    let sdkURL = URL(string: "https://swan-mobile-web-component.swan.so/v1.3.8/index.html")!
 
     static let bridgeName = "swanBridge"
 
@@ -92,6 +92,8 @@ final class ViewController: UIViewController {
     // Example values for both halves, with every text key, are in
     // GALLERY_PICK.md and GALLERY_PICK_TEXT_CONFIG.md.
 
+    /// Custom scheme for serving photos straight into <img src>. Must not collide
+    /// with a scheme WebKit already handles — registering "http" or "https" throws.
     static let photoScheme = "swan-photo"
 
     /// Held strongly here; the configuration's reference alone is not something to
@@ -126,6 +128,10 @@ final class ViewController: UIViewController {
     var lastReferenceQualities: [Float?] = []
     var lastReferenceSpread: Float?
     var lastReferenceShift: Float?
+
+    /// Face measurements from the last photo `matchPerson` looked at, for
+    /// `ScanEval`. Only filled in eval mode — the quality number costs an extra
+    /// Vision pass per photo.
     var lastFaceMetrics: FaceMetrics?
 
     /// Whether the last photo `matchPerson` scored had its face re-cropped from a
@@ -185,7 +191,12 @@ final class ViewController: UIViewController {
         }
         return result == KERN_SUCCESS ? Int(info.resident_size / 1_048_576) : 0
     }
+
+    /// What the second head-to-toe check found, when `matchPerson` ran one — see
+    /// the full-body gate there. Nil when no retry happened. Read by the scan log.
     var lastBodyRetry: (note: String, rescued: Bool)?
+    /// The pose observation the last `bodyCheck` kept, for `BodyScore`.
+    var lastBodyObservation: VNHumanBodyPoseObservation?
     /// Pupil-to-pupil distance of the widest face in the photo just examined,
     /// in the scan's pixels. Nil without landmarks. For the v2 selfie rule and
     /// the `selfieSmallEyes` count.
@@ -194,6 +205,7 @@ final class ViewController: UIViewController {
     /// How many faces in the last photo examined were the shopper's. Above 1 it was
     /// a mirror shot — see `sameShopperFacesMax`. Read by the scan log and summary.
     var lastShopperFaces = 1
+
     /// Results kept between scans — see `ScanStore`. Opened per scan for the
     /// signed-in account; nil when the store is off.
     var scanStore: ScanStore?
@@ -292,8 +304,6 @@ final class ViewController: UIViewController {
 
     /// One console line per photo scanned. Useful on a small library, a flood on
     /// a real one — a 10k-photo scan prints 10k lines.
-    /// One console line per photo scanned. Useful on a small library, a flood on
-    /// a real one — a 10k-photo scan prints 10k lines.
     static let verboseLogging = false
 
     /// Measures matching against a hand-labelled album and prints the result after
@@ -326,6 +336,13 @@ final class ViewController: UIViewController {
     /// The flow is unaffected either way — this only decides whether the host
     /// prints what crosses the bridge.
     static let debugBridgeLogging = false
+    /// Diagnostic: writes the selfie frames the page sent, as received, to the
+    /// app's Documents folder (Files app → On My iPhone → photoApp → selfie-frames),
+    /// so a frame from a tester's phone can be run through the Mac matcher. Each
+    /// scan overwrites the previous set. Off in any shared copy. Needs
+    /// `UIFileSharingEnabled` and `LSSupportsOpeningDocumentsInPlace` in Info.plist
+    /// for the folder to show in the Files app.
+    static let saveReferenceFrames = false
 
     /// Writes the selfie and candidate face crops to Documents. Biometric data
     /// on disk — keep false outside local debugging.
@@ -416,6 +433,7 @@ final class ViewController: UIViewController {
             _ = Self.faceRecognizer
             FaceExpression.warmUp()
             if Self.coverReadEnabled { FaceCover.warmUp() }
+            if Self.fullLengthScoreV2 && Self.objectReadEnabled { BodyObjects.warmUp() }
             let hands = VNDetectHumanHandPoseRequest()
             if let ctx = CGContext(data: nil, width: 64, height: 64, bitsPerComponent: 8, bytesPerRow: 0,
                                    space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue),
@@ -495,6 +513,13 @@ final class ViewController: UIViewController {
         configuration.setURLSchemeHandler(photoSchemeHandler, forURLScheme: Self.photoScheme)
 
         webView = WKWebView(frame: .zero, configuration: configuration)
+        // ngrok's free tier answers any browser-looking request, scripts included,
+        // with a "visit site" page, which the sign-in screen now hides. A user agent
+        // that does not start with "Mozilla" is passed through; the page's own
+        // iPhone checks still match. Only for ngrok hosts; the CDN sees the default.
+        if sdkURL.host?.contains("ngrok") == true {
+            webView.customUserAgent = "SwanHost/1 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148"
+        }
         webView.uiDelegate = self
         webView.navigationDelegate = self
         webView.translatesAutoresizingMaskIntoConstraints = false
@@ -918,6 +943,12 @@ extension ViewController {
         if asset.mediaSubtypes.contains(.photoPanorama) || Double(max(w, h)) / Double(min(w, h)) > panoramaAspect { return "panorama \(w)x\(h)" }
         return nil
     }
+
+    /// Two matches whose Vision feature prints are closer than this repeat one
+    /// shot: the same pose seconds apart. Measured 19 Oct 2026 on a test
+    /// library: repeats 0.17–0.25, the same pose with a different expression
+    /// 0.19, unrelated photos around 0.8. Both stay in the grid; the page
+    /// pre-selects only one of a group.
     static let duplicateDistance: Float = 0.2
 
     static func featurePrint(of image: UIImage) -> VNFeaturePrintObservation? {
@@ -953,6 +984,29 @@ extension ViewController {
     /// matches really do reach the cut-off; a clean library stays untouched.
     static let weakReferenceReach: Float = 0.55
 
+    /// Own-photo check, logged only (30 Oct 2026). The gap rule and the
+    /// weak-reference cut follow the selfie: with a selfie of quality 0.35 the
+    /// cut fell to 0.50 and withdrew five of the shopper's own photos (four
+    /// fronts with the head turned about 50°, at 0.50–0.59, from a shoot whose
+    /// level fronts matched at 0.36–0.40). Photos of one person sit closer to
+    /// each other than to a quick selfie, so a second opinion can come from the
+    /// shopper's sure matches: those under `ownPhotoCore`. With this on, every
+    /// face from `gapCutFloor` to `gapCutCeiling` (matches held for the gap rule
+    /// and near-miss strangers alike) is logged with its nearest distance to
+    /// those sure matches, to pick a limit from. Nothing is decided by it.
+    static let ownPhotoLogEnabled = true
+    static let ownPhotoCore: Float = 0.40
+
+    /// Own-photo keep (30 Oct 2026). On, a match the gap rule or the
+    /// weak-reference cut would withdraw stays when its face is under
+    /// `ownPhotoKeepLimit` from the nearest sure match (see
+    /// `ownPhotoLogEnabled`). Measured on three libraries: the shopper's own
+    /// borderline photos sat 0.15–0.47 from their sure matches, other people
+    /// 0.50 and over (a stranger read exactly 0.500 on one library, so the
+    /// limit sits under it). Off, the gap rule withdraws as before.
+    static let ownPhotoKeepEnabled = true
+    static let ownPhotoKeepLimit: Float = 0.48
+
     /// The sharpest selfie frame must reach this Vision capture quality, else the
     /// page asks for a retake (`selfie-too-blurry`). The number is relative to the
     /// phone and the light: one phone's good frames read 0.46–0.54, another's
@@ -960,6 +1014,10 @@ extension ViewController {
     /// selfie screen. Set to catch only a truly blurred tap (0.06–0.11); the weak-
     /// reference fallback handles a merely middling selfie.
     static let selfieMinQuality: Float = 0.25
+
+    /// The lowered cut-off for this run's distances, or nil to keep
+    /// `matchThreshold`: the midpoint of the largest gap under the ceiling,
+    /// clamped to the floor.
     static func gapCut(distances: [Float]) -> Float? {
         guard gapCutEnabled else { return nil }
         let sorted = distances.filter { $0 < gapCutCeiling }.sorted()
@@ -1074,6 +1132,198 @@ extension ViewController {
     static let relativeEyeGateEnabled = true
     static let relativeOpenness: Float = 0.4
     static let relativeBaselineMin = 3
+
+    /// The v2 selfie score — GALLERY_PICK_V2_PLAN.md, item 3. On, a selfie
+    /// that passed the gates scores T, 0 to 1: six groups, each the lowest of
+    /// its signals, combined by a weighted geometric mean (pose 0.30, light
+    /// 0.20, gaze 0.15, expression 0.15, visibility 0.10, detail 0.10). Each
+    /// signal is a straight line from 1 at its tolerance to 0 at its limit.
+    /// T at `tierALine` or above is Tier A; the page pre-selects selfies from
+    /// Tier A only and sends `tier` with the match. It replaces, for selfies,
+    /// the eight-part average, Apple's capture quality, the multipliers and
+    /// the two score bands. Fronts and sides keep the 1.3.x score until item
+    /// 5. Off: the 1.3.x score for every photo.
+    ///
+    /// Angles are Vision's, the same readings the gates use, so a selfie the
+    /// gates let through is never zeroed by a second reading of its angle.
+    /// Gaze and camera height score 1 until they are measured (plan, item 3
+    /// decisions). Measured 30 Oct 2026 for the expression limits: clearly
+    /// pursed lips read 0.87–1.00; relaxed lips, checked by eye on a library,
+    /// read up to 0.45, and light deliberate puckers that look near-normal
+    /// 0.29–0.37; a frown read 0.31, neutral brows 0.15 or less.
+    static let selfieScoreV2 = true
+    static let tierALine: Float = 0.70
+
+    /// The v2 order — GALLERY_PICK_V2_PLAN.md, item 4. On, each match carries
+    /// `order` for the grid and the pre-selection, and `takenAt` (capture time,
+    /// ms) for the page's one-session rule; `score` stays T for the badge.
+    /// Within Tier A, a selfie's R = 0.45 T + 0.40 P + 0.15 recency, with P =
+    /// 0.7 × 0.5 (no aesthetic score yet) + 0.3 × the person's choices
+    /// (favourite 0.5, edited 0.25, their pick from a burst 0.25, capped at 1);
+    /// a full-length photo's R = 0.8 T + 0.2 recency. Fronts and sides have no
+    /// tier until item 5, so the 1.3.x bands stand in: a clean photo is Tier
+    /// A, a demoted one Tier B. Tier A sends 1 + R; Tier B sends T, so it keeps
+    /// its order, after every Tier A photo. Off: no `order`, the page ranks by
+    /// `score`.
+    static let orderV2Enabled = true
+    /// Recency, in months: 1 up to the first, 0 from the second.
+    static let selfieRecency: (good: Double, bad: Double) = (12, 36)
+    static let fullLengthRecency: (good: Double, bad: Double) = (6, 24)
+
+    /// `order` and `takenAt` for one match — see `orderV2Enabled`.
+    static func orderFields(asset: PHAsset, type: PhotoType, score: MuseScore?) -> [String: Any] {
+        guard orderV2Enabled, let score else { return [:] }
+        var fields: [String: Any] = [:]
+        var recency: Double = 0
+        if let taken = asset.creationDate {
+            fields["takenAt"] = Int(taken.timeIntervalSince1970 * 1000)
+            let months = Date().timeIntervalSince(taken) / (30.44 * 24 * 3600)
+            let curve = type == .selfie ? selfieRecency : fullLengthRecency
+            recency = min(max((curve.bad - months) / (curve.bad - curve.good), 0), 1)
+        }
+        let t = Double(score.value)
+        // A body-scored photo with no tier sits under the usable floor: never Tier A.
+        let tierA = score.tier.map { $0 == "A" } ?? (score.body == nil && !score.demoted)
+        guard tierA else { fields["order"] = t; return fields }
+        let r: Double
+        if type == .selfie {
+            var choices: Double = 0
+            if asset.isFavorite { choices += 0.5 }
+            if asset.hasAdjustments { choices += 0.25 }
+            if asset.burstSelectionTypes.contains(.userPick) { choices += 0.25 }
+            let p = 0.7 * 0.5 + 0.3 * min(choices, 1)
+            r = 0.45 * t + 0.40 * p + 0.15 * recency
+        } else {
+            r = 0.8 * t + 0.2 * recency
+        }
+        fields["order"] = 1 + r
+        return fields
+    }
+    static let scoreWeightsV2: [(name: String, weight: Float)] = [
+        ("pose", 0.30), ("light", 0.20), ("gaze", 0.15), ("expression", 0.15), ("visibility", 0.10), ("detail", 0.10),
+    ]
+    /// Pose, in degrees: tolerance then limit. Yaw ends at the yaw gate (20°,
+    /// agreed 30 Oct 2026) rather than the spec's 15°, so a selfie the gate
+    /// lets through never scores a zero pose.
+    static let posePitch: (good: Float, bad: Float) = (3, 15)
+    static let poseYaw: (good: Float, bad: Float) = (5, 20)
+    static let poseRoll: (good: Float, bad: Float) = (5, 20)
+    /// Camera to face, in centimetres. Full marks from 40 cm, not the spec's
+    /// 45 (agreed 30 Oct 2026): clean selfies on every library measured 27 to
+    /// 45 cm, and at 45 an arm's-length selfie at 30–35 cm lost Tier A on
+    /// distance alone. Zero stays at 25 cm, the too-close gate.
+    static let poseDistance: (good: Float, bad: Float) = (40, 25)
+    /// Light: the brighter half of the face over the darker half; the face
+    /// over the whole frame (backlight); the share of blown-out face pixels.
+    /// Bright only (30 Oct 2026): the face box takes in hair, beard and a
+    /// night background, and counting black pixels zeroed well-lit selfies.
+    static let lightEvenness: (good: Float, bad: Float) = (1.3, 2.0)
+    static let lightBacklight: (good: Float, bad: Float) = (0.8, 0.4)
+    static let lightClipped: (good: Float, bad: Float) = (0.01, 0.05)
+    /// Expression: each of these caps the group. A closed smile, eyes held
+    /// wide or raised brows, a pucker and a frown at 0.5; an open smile (kept
+    /// by `MuseScore.smileKeepsTeeth`) at 0.4, so it sits behind a closed one.
+    static let expressionCapped: Float = 0.5
+    static let expressionOpenSmile: Float = 0.4
+    /// Raised from 0.25 to 0.6 on 30 Oct 2026: two relaxed-lip selfies read
+    /// 0.29 and 0.30 and dropped to Tier B.
+    static let puckerLimit: Float = 0.6
+    static let frownLimit: Float = 0.25
+    /// Eyes held wide or raised brows cap expression and send `wideEyes`: the
+    /// page pre-selects such a selfie only when no other Tier A selfie is
+    /// left (agreed 30 Oct 2026). The eyes-wide reading counts from this line, lower than the 1.3.x
+    /// `MuseScore.eyeWideFilter`: a staring selfie read 0.08, everyday
+    /// selfies 0.00–0.03.
+    static let wideEyesLine: Float = 0.05
+    /// Visibility: the share of the face oval that is skin or hair, from
+    /// `FaceCover`. Clear glasses cap it at `glassesCap`.
+    static let visibilityShare: (good: Float, bad: Float) = (0.95, 0.85)
+    static let glassesCap: Float = 0.85
+    static let glassesConfidence: Float = 0.5
+    /// Detail: eye spacing in the original's pixels; sharpness keeps its 1.3.x
+    /// reading.
+    static let detailEyeSpacing: (good: Float, bad: Float) = (120, 60)
+    /// A selfie whose eyes are under this many pixels apart (in the original)
+    /// is Tier B whatever its T (agreed 30 Oct 2026): detail is a tenth of the
+    /// score, so a face shot from metres away with a zoom lens still reached
+    /// Tier A at 80 px, and a face that small is a poor reference for the Muse.
+    /// It stays in the grid. Hand-held selfies read 300 to 550 px.
+    static let tierAEyeSpacingMin: Float = 90
+
+    /// The v2 full-length score — GALLERY_PICK_V2_PLAN.md, item 5, part a. On,
+    /// a matched front, three-quarter or side is scored by `BodyScore`: how
+    /// clearly the body shows under the clothes, from Vision's person
+    /// segmentation and the pose joints, with openness and image quality. The
+    /// face no longer decides anything for these photos: sunglasses, a hand
+    /// over the face, closed eyes and a smile neither filter nor lower them
+    /// (the document gate still applies). Tier A at `fullLengthTierALine`,
+    /// usable down to `fullLengthUsableFloor`; the page pre-selects Tier A
+    /// first and fills a shortfall from Tier B. Off: the 1.3.x face score.
+    static let fullLengthScoreV2 = true
+    static let fullLengthTierALine: Float = 0.70
+    static let fullLengthUsableFloor: Float = 0.45
+    /// The outfit multipliers of the 1.3.x score (`MuseScore.outfitMultiplier`)
+    /// also apply on top of the body score: a busy torso always, and tailoring
+    /// or formal wear from the whole-photo labels only while `garmentCapsEnabled`
+    /// is off, since the caps cover the same labels. The tier is the body's own;
+    /// only the value and the order move. Off, the body score stands alone.
+    static let fullLengthOutfitMultiplier = true
+    /// Item 5b, garment caps. A garment the whole-photo classifier names at or
+    /// over its line caps the body regions it covers (`BodyScore.Caps`): the
+    /// region can read no higher than the cap, whatever the fit and outline
+    /// say. Measured 30 Oct 2026 on the 121 test photos: suits fell from
+    /// 0.72–0.96 to 0.46–0.61, puffers and winter jackets to 0.41–0.78, hoodies
+    /// lost about 0.1; dresses already read legs 0 under the hem. `jacket`
+    /// also names fitted denim, so its cap is 0.5, not a coat's. Coats,
+    /// cardigans and fleeces have no reliable label and are left to the fit.
+    static let garmentCapsEnabled = true
+    /// Item 5b, objects. On, MediaPipe's object detector (`BodyObjects`) runs
+    /// on every matched front or side — about 80 ms — and each body region is
+    /// lowered by the share of it a bag, umbrella, bicycle or chair covers;
+    /// objects over a quarter of the body make the photo unusable
+    /// (`BodyScore.objectBodyGate`). Off: no detector, no model load.
+    static let objectReadEnabled = true
+    /// Item 6, early stop — GALLERY_PICK_V2_PLAN.md. On, the local pass stops
+    /// once `earlyStopTierA` distinct Tier A shots of each kind are in hand
+    /// (held matches and repeats of a shot do not count), but never before
+    /// `earlyStopMinExamined` photos, so the gap rule still sees enough
+    /// distances; the iCloud pass is then skipped and the summary says how
+    /// many photos were not examined. Photos not examined have no store
+    /// record and are read next time if the recent ones fall short. Every
+    /// progress and match message carries the Tier A counts so far as
+    /// `tierA`, which the page counts against the five slots.
+    static let earlyStopEnabled = false
+    static let earlyStopMinExamined = 500
+    /// Item 6, excluded tiles. On, a match the face or body gates drop is still
+    /// sent to the page with `tier: "x"` and `gate` (why), no score, and goes
+    /// last in the completion list, so a review build can show it greyed at
+    /// the bottom of the grid with the gate's name, as the client's test
+    /// sheets do. The page shows them only with its own switch on. Off for a
+    /// release to shoppers: nothing excluded is sent.
+    static let sendExcludedMatches = false
+    static let earlyStopTierA: [String: Int] = ["selfie": 10, "front": 6, "side": 6]
+    /// The page's slot for a type: a three-quarter photo fills a side slot.
+    static func slot(of type: PhotoType) -> String {
+        switch type { case .selfie: return "selfie"; case .front: return "front"; default: return "side" }
+    }
+    /// Indian formal wear, read 30 Oct 2026 on a tester's photos: a sherwani
+    /// is `lab_coat` 0.33–0.49 (never seen on the 121 test photos) or `suit`
+    /// 0.49–0.50; a bandhgala only `suit` 0.24–0.36. So `suit` has two lines:
+    /// a sure suit from 0.4 takes the full cap, a likely one from 0.22 (plain
+    /// clothes never read over 0.21 on the test photos) takes a jacket's.
+    static let garmentCaps: [(labels: Set<String>, line: Float, torso: Float, legs: Float, arms: Float)] = [
+        (["suit", "tuxedo"], 0.4, 0.2, 1, 0.2),
+        (["lab_coat"], 0.3, 0.2, 1, 0.2),
+        (["suit", "tuxedo"], 0.22, 0.5, 1, 0.5),
+        (["gown", "sari", "kimono", "wedding_dress"], 0.3, 1, 0.2, 1),
+        (["hoodie"], 0.5, 0.5, 1, 1),
+        (["jacket"], 0.6, 0.5, 1, 0.5),
+    ]
+    /// Prints every whole-photo label at `fullLengthLabelFloor` or over on a
+    /// body-scored photo, to learn what the classifier calls Indian formal
+    /// wear before the 5b cap list is written.
+    static let fullLengthLabelLog = true
+    static let fullLengthLabelFloor: Float = 0.2
     /// Part 2 of the selfie gates: what covers the face, read by `FaceCover`
     /// from the MediaPipe selfie segmenter on a matched selfie that no other
     /// gate has dropped. With `coverGatesEnabled` a selfie is out when the
@@ -1093,6 +1343,44 @@ extension ViewController {
     static let coverHairlineLimit: Float = 0.3
     static let coverJawLimit: Float = 0.4
     static let coverFaceLimit: Float = 0.15
+    /// Documents (30 Oct 2026): a photographed passport, ID card or printed
+    /// page matches the face printed on it and passes every gate above, and
+    /// must never reach the Muse or an upload. With `documentGateEnabled` a
+    /// match of any type is out ("document") when the whole-image
+    /// classifier's document-like labels (`documentLabels`) sum to
+    /// `documentLabelSumLimit` or more, or ("handwriting") when handwriting
+    /// alone reads `handwritingLimit` or more. Measured: passport photo 1.05
+    /// and 1.73, Aadhaar 0.78, voter ID 0.77, PAN card 0.72; clean matches on
+    /// two libraries 0.16 at most, one selfie with paper behind it 0.37.
+    /// Handwriting: clean 0.06 at most, a passport page 0.42; ID cards read
+    /// 0.00 to 0.11, so the label sum is what catches them.
+    ///
+    /// Second rule, for a document the labels only half see: out ("document")
+    /// when the labels sum to `documentPageLabelLimit` or more and Vision's
+    /// document segmentation finds a page at `documentConfidenceLog` or more,
+    /// with the matched face inside it, covering less than
+    /// `documentPageAreaLimit` of the frame. Measured: two documents read
+    /// labels 0.40 and 0.42 with a page at 0.98–0.99 over 28% and 39% of the
+    /// frame; the selfie at 0.37 had its "page" over 99% of the frame (the
+    /// whole picture), and a full-length front with a page at 0.99 read labels
+    /// 0.03. Clean matches never reached 0.3.
+    ///
+    /// Logged with every match, not part of the gate: Vision's text detector
+    /// (one false box can cover a third of a clean selfie), and its document
+    /// segmentation on its own (fires on doors and frames behind a
+    /// full-length photo).
+    static let documentReadEnabled = true
+    static let documentGateEnabled = true
+    static let documentLabels: Set<String> = ["document", "printed_page", "screenshot", "passport", "handwriting",
+                                              "ticket", "receipt", "text", "id_card", "signature", "paper"]
+    static let documentLabelSumLimit: Float = 0.5
+    static let handwritingLimit: Float = 0.3
+    static let documentPageLabelLimit: Float = 0.3
+    static let documentPageAreaLimit: Float = 0.9
+    static let documentTextShareLog: Float = 0.10
+    /// Vision's document segmentation, counted at this confidence when the
+    /// matched face sits inside the document it found.
+    static let documentConfidenceLog: Float = 0.8
 
     /// A face's width against the frame's shorter side — the one number every
     /// selfie decision reads, so the scan and a tap cannot disagree about it.
@@ -1244,6 +1532,7 @@ extension ViewController {
         if PHPhotoLibrary.authorizationStatus(for: .readWrite) == .notDetermined {
             PHPhotoLibrary.requestAuthorization(for: .readWrite) { _ in }
         }
+
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else { return }
 
@@ -1257,6 +1546,7 @@ extension ViewController {
             let sent = referenceImages ?? []
             let frameURIs = pinned ? [referenceURI] : Array((sent.isEmpty ? [reference] : sent).prefix(3))
             let frames = frameURIs.compactMap { Self.image(fromDataURI: $0) }
+            if Self.saveReferenceFrames { Self.saveFrames(frames) }
             if pinned, sent.count > 1 {
                 print("🧪 eval selfie pinned — \(sent.count) frames from the page ignored")
             }
@@ -1293,6 +1583,11 @@ extension ViewController {
                 }
                 return
             }
+
+            // One face, looking at the camera — see `selfieMaxYawDegrees`. The
+            // page returns to the selfie screen with the reason, as it does for
+            // no face, and the rejected frame is dropped on both sides: nothing
+            // below runs, so no reference is kept from it.
             if let rejection = self.selfieRejection(in: selfie) {
                 print("🤳 Selfie rejected — \(rejection.note)")
                 DispatchQueue.main.async {
@@ -1351,6 +1646,9 @@ extension ViewController {
                 }
                 self.lastReferenceBlended = used.count
             }
+
+            // Case A, off by default: every other frame with a face becomes a
+            // reference too — see `matchAgainstAllFrames`.
             if Self.matchAgainstAllFrames {
                 self.extraReferenceEmbeddings = frames.enumerated()
                     .filter { $0.offset != chosen.index }
@@ -1367,6 +1665,7 @@ extension ViewController {
             // rather than on the first match. Nothing is kept from either pass.
             FaceExpression.warmUp()
             if Self.coverReadEnabled { FaceCover.warmUp() }
+            if Self.fullLengthScoreV2 && Self.objectReadEnabled { BodyObjects.warmUp() }
             if Self.evalMode, let crop = self.crop(selfieCG, to: CGRect(x: 0.25, y: 0.25, width: 0.5, height: 0.5)) {
                 recognizer.benchmark(on: crop)
             }
@@ -1531,8 +1830,12 @@ extension ViewController {
             // Matches between `gapCutFloor` and the cut-off: held back until the gap
             // is known, then appended so nothing on screen moves.
             var heldIds: [String] = []
-            // Near-duplicates (see `duplicateDistance`): each match gets a group id,
-            // its own or the earlier match it repeats. The page picks one per group.
+            // Faces under `gapCutCeiling` with their vectors, for the own-photo
+            // check — see `ownPhotoLogEnabled`. `matched` is false for a no-match.
+            var nearFaces: [(n: Int, id: String, distance: Float, type: String, matched: Bool, vector: [Float])] = []
+            // Near-duplicates among the matches — see `duplicateDistance`. Each
+            // match gets a group: its own id, or the id of the earlier match it
+            // repeats. The page keeps one pick per group; all are still shown.
             var featurePrints: [(id: String, print: VNFeaturePrintObservation)] = []
             var dupGroups: [String: String] = [:]
             var duplicates = 0
@@ -1541,6 +1844,8 @@ extension ViewController {
 
             // Per-gate tallies — which stage a disappointing result came from.
             var noImage = 0
+            // Near-duplicates (see `duplicateDistance`): each match gets a group id,
+            // its own or the earlier match it repeats. The page picks one per group.
             // Scanned from the phone's smaller copy, the full photo being in iCloud.
             var localCopies = 0
             var noFace = 0
@@ -1569,6 +1874,15 @@ extension ViewController {
             // coverage from the selection.
             var found: [PhotoType: Int] = [:]
             var examined = 0
+            // Distinct Tier A shots per slot, shown and final — see `earlyStopEnabled`.
+            var tierA: [String: Int] = ["selfie": 0, "front": 0, "side": 0]
+            var stoppedEarly = false
+            // Gated matches sent for the review grid — see `sendExcludedMatches`.
+            var excludedIds: [String] = []
+            func tierAReached() -> Bool {
+                Self.earlyStopEnabled && examined >= Self.earlyStopMinExamined
+                    && Self.earlyStopTierA.allSatisfy { tierA[$0.key, default: 0] >= $0.value }
+            }
 
             // iCloud-only photos whose thumbnail looks like a selfie, examined after
             // the local pass — see `cloudDownloadCap`.
@@ -1621,9 +1935,14 @@ extension ViewController {
             // cover limit — see `coverReadEnabled`.
             var coverRead = 0
             var coverFacts: [String: Int] = [:]
-
-            // One loaded photo through every gate. Shared by the local pass and the
-            // iCloud pass, so a downloaded photo faces exactly the same checks.
+            // Matches the document reader saw, and how many had text over the
+            // logging share — see `documentReadEnabled`.
+            var documentRead = 0
+            var textHeavy = 0
+            var faceOnDocument = 0
+            var documentLabelled = 0
+            var handwritten = 0
+            var faceOnPage = 0
             // Skipped from the library record alone — see `shapeReject`.
             var skippedShape = 0
             // No-matches decided before body pose — see `matchBeforePose`.
@@ -1633,6 +1952,8 @@ extension ViewController {
             var memoryPeak = memoryAtStart
             FaceRecognizer.timing = { stage, ms in self?.stageMs[stage, default: 0] += ms }
 
+            // One loaded photo through every gate. Shared by the local pass and the
+            // iCloud pass, so a downloaded photo faces exactly the same checks.
             // The store — see `ScanStore`. `remember` writes a photo's verdict once
             // examined; `decideFromStore` counts a photo the store already knows
             // without loading it, and says so. Candidates are compared with the
@@ -1685,6 +2006,10 @@ extension ViewController {
                     guard best >= storeCutoff else { return false }
                     noMatch += 1
                     scoredDistances.append(best)
+                    if Self.ownPhotoLogEnabled || Self.ownPhotoKeepEnabled, best < Self.gapCutCeiling,
+                       let index = distances.firstIndex(of: best), index < record.vectors.count {
+                        nearFaces.append((n, asset.localIdentifier, best, "?", false, record.vectors[index]))
+                    }
                     if let closest = closestNoMatch, closest <= best {} else { closestNoMatch = best }
                     if best - Self.matchThreshold <= 0.1 { nearMisses += 1 }
                     storeDecided += 1
@@ -1721,40 +2046,40 @@ extension ViewController {
                     switch outcome {
                     case .noFace:
                         noFace += 1
-                        eval.note(asset, image: image, rotated: wasRotated, gate: .noFace)
                         remember(asset, .noFace)
+                        eval.note(asset, image: image, rotated: wasRotated, gate: .noFace)
                         if Self.verboseLogging { print("  ○  [\(n)] no face             \(px) \(orient)") }
 
                     case .group(let faceCount):
                         groupSkipped += 1
-                        eval.note(asset, image: image, rotated: wasRotated, gate: .group)
                         // Four or more faces, or a face that could not be embedded,
                         // is a group whoever the shopper is; two or three faces are
                         // a group only against this selfie, so their vectors are kept.
                         remember(asset, faceCount > Self.sameShopperFacesMax || (self?.lastEmbeddings.isEmpty ?? true) ? .group : .candidate)
+                        eval.note(asset, image: image, rotated: wasRotated, gate: .group)
                         if Self.verboseLogging { print("  \u{1f465} [\(n)] group (\(faceCount) faces) — skipped   \(px) \(orient)") }
 
                     case .faceTooSmall(let pixels):
                         tooSmall += 1
-                        eval.note(asset, image: image, rotated: wasRotated, gate: .faceTooSmall, metrics: metrics)
                         remember(asset, .faceTooSmall)
+                        eval.note(asset, image: image, rotated: wasRotated, gate: .faceTooSmall, metrics: metrics)
                         if Self.verboseLogging { print("  \u{1f50e} [\(n)] face too small (\(pixels)px)   \(px) \(orient)") }
 
                     case .otherPeople(let body):
                         otherPeople += 1
-                        eval.note(asset, image: image, rotated: wasRotated, gate: .otherPeople, body: body, metrics: metrics)
                         // One face: someone else is in the photo whoever the shopper
                         // is. Several faces all the shopper's: only against this selfie.
                         remember(asset, (self?.lastShopperFaces ?? 1) == 1 ? .otherPeople : .candidate)
+                        eval.note(asset, image: image, rotated: wasRotated, gate: .otherPeople, body: body, metrics: metrics)
                         if Self.verboseLogging { print("  \u{1f465} [\(n)] \(body.people) people — skipped   \(px) \(orient)") }
 
                     case .notFullBody(let body):
                         notFullBody += 1
-                        eval.note(asset, image: image, rotated: wasRotated, gate: .notFullBody, body: body, metrics: metrics)
                         // Final once the larger render was tried, or when nothing
                         // could trigger that retry. Otherwise a match by a later
                         // selfie could still rescue it, so the vectors are kept.
                         remember(asset, self?.lastBodyRetry != nil || !body.headSeen || body.lowerJoints < 1 ? .notFullBody : .candidate)
+                        eval.note(asset, image: image, rotated: wasRotated, gate: .notFullBody, body: body, metrics: metrics)
                         if Self.verboseLogging { print("  \u{1f9cd} [\(n)] not head to toe (head \(body.headSeen), ankles \(body.ankles), span \(String(format: "%.2f", body.span)), feet room \(String(format: "%.3f", body.footRoom)); knees \(body.knees), knee span \(String(format: "%.2f", body.kneeSpan)), knee drop \(body.kneeDrop.map { String(format: "%.2f", $0) } ?? "–"))   \(px) \(orient)") }
 
                     case .scored(let distances, let facePixels, let body, let type, let profile, let museScore):
@@ -1778,7 +2103,24 @@ extension ViewController {
                         let cutoff = profile ? Self.profileMatchThreshold
                             : type == .selfie ? Self.selfieMatchThreshold
                             : Self.matchThreshold
-                        // Facts for the gates still to come, on every matched selfie.
+                        // The vector of the closest face, for the own-photo check.
+                        // Clean faces only, as for the gap rule; a match the size
+                        // check hides is told apart at the end by `matchScores`.
+                        if Self.ownPhotoLogEnabled || Self.ownPhotoKeepEnabled, unusable == nil, museScore?.demoted != true, distance < Self.gapCutCeiling,
+                           let vectors = self?.lastEmbeddings, vectors.count == distances.count,
+                           let index = distances.firstIndex(of: distance) {
+                            nearFaces.append((n, asset.localIdentifier, distance, type.rawValue, distance < cutoff, vectors[index]))
+                        }
+                        // Facts for the gates still to come, on every match.
+                        if distance < cutoff, let doc = museScore?.document {
+                            documentRead += 1
+                            if doc.textArea >= Self.documentTextShareLog { textHeavy += 1 }
+                            if doc.docConfidence >= Self.documentConfidenceLog && doc.faceInDoc { faceOnDocument += 1 }
+                            if doc.labelSum >= Self.documentLabelSumLimit { documentLabelled += 1 }
+                            if doc.handwriting >= Self.handwritingLimit { handwritten += 1 }
+                            if doc.faceOnPage && doc.labelSum < Self.documentLabelSumLimit
+                                && doc.handwriting < Self.handwritingLimit { faceOnPage += 1 }
+                        }
                         if distance < cutoff, type == .selfie, let museScore {
                             if museScore.coverHint { coverHints += 1 }
                             if museScore.focalAssumed { focalAssumed += 1 }
@@ -1815,7 +2157,18 @@ extension ViewController {
                             eval.note(asset, image: image, rotated: wasRotated, gate: .unusableFace, distance: distance,
                                       type: type, body: body, metrics: metrics,
                                       fullRes: self?.lastCropFullRes, score: museScore)
-                            if Self.verboseLogging { print("  \u{1f648} [\(n)] unusable face — \(why)  d=\(String(format: "%.3f", distance)) type=\(type.rawValue)  \(px) \(orient)  \(museScore?.note ?? "")") }
+                            if Self.verboseLogging { print("  \u{1f648} [\(n)] id=\(asset.localIdentifier.prefix(8)) unusable face — \(why)  d=\(String(format: "%.3f", distance)) type=\(type.rawValue)  \(px) \(orient)  \(museScore?.note ?? "")") }
+                            if Self.sendExcludedMatches {
+                                excludedIds.append(asset.localIdentifier)
+                                let excludedPayload: [String: Any] = ["assetId": asset.localIdentifier, "type": type.rawValue,
+                                                                      "isFullBody": body.isHeadToToe, "kneeUp": body.byKnees,
+                                                                      "distance": distance, "dupGroup": asset.localIdentifier,
+                                                                      "tier": "x", "gate": why, "usable": false,
+                                                                      "done": n, "total": total, "tierA": tierA]  // sent only under `sendExcludedMatches`
+                                DispatchQueue.main.async {
+                                    self?.sendToWeb(["type": "onGalleryMatchFound", "payload": excludedPayload])
+                                }
+                            }
                         } else if let hidden = { () -> (gate: EvalGate, why: String)? in
                             // Sized before the grid sees it: a photo whose original
                             // cannot be sent as it is never reaches the shopper.
@@ -1854,7 +2207,9 @@ extension ViewController {
                             if Self.verboseLogging { print("  \u{1f4cf} [\(n)] hidden — \(hidden.why)  d=\(String(format: "%.3f", distance)) type=\(type.rawValue)  \(px) \(orient)") }
                         } else {
                             matchedIds.append(asset.localIdentifier)
-                            matchScores[asset.localIdentifier] = (distance, type, museScore?.value, museScore?.breakdown)
+                            let orderFields = Self.orderFields(asset: asset, type: type, score: museScore)
+                            matchScores[asset.localIdentifier] = (distance, type, museScore?.value,
+                                                                  museScore.map { $0.breakdown.merging(orderFields) { _, new in new } })
                             if museScore?.tilted == true { tiltedMatches += 1 }
                             var dupGroup = asset.localIdentifier
                             if let fingerprint = Self.featurePrint(of: image) {
@@ -1882,6 +2237,9 @@ extension ViewController {
                                                     id: asset.localIdentifier)
                             found[type, default: 0] += 1
                             if body.byKnees { kneeLength += 1 }
+                            if museScore?.tier == "A", dupGroup == asset.localIdentifier, !(Self.gapCutEnabled && distance >= Self.gapCutFloor) {
+                                tierA[Self.slot(of: type), default: 0] += 1
+                            }
                             // The more closed eye, for the relative gate at the end.
                             if Self.relativeEyeGateEnabled, type == .selfie, let e = museScore?.expression {
                                 selfieOpenness[asset.localIdentifier] = 1 - e.blinkMax
@@ -1917,16 +2275,20 @@ extension ViewController {
                                                                    "dupGroup": dupGroup,
                                                                    "done": n,
                                                                    "total": total]
+                                // The Tier A counts ride along only while the early
+                                // stop is on — see `earlyStopEnabled`.
+                                if Self.earlyStopEnabled { matchPayload["tierA"] = tierA }
                                 // Higher is better. The page pre-selects the top of each type by it.
                                 if let museScore {
                                     matchPayload["score"] = museScore.value
                                     matchPayload.merge(museScore.breakdown) { _, new in new }
                                 }
+                                matchPayload.merge(orderFields) { _, new in new }
                                 DispatchQueue.main.async {
                                     self?.sendToWeb(["type": "onGalleryMatchFound", "payload": matchPayload])
                                 }
                             }
-                            if Self.verboseLogging { print("  ✅ [\(n)] MATCH\(held ? " (held)" : "")     d=\(String(format: "%.3f", distance)) cut=\(String(format: "%.2f", cutoff))  \(px) \(orient)  face=\(facePixels)px eyes=\(self?.lastEyeSpacing.map { String(format: "%.0f", $0) } ?? "?")px joints=\(body.lowerJoints)\(body.byKnees ? " knee-length" : "") type=\(type.rawValue) shoulders=\(body.shoulderSpread.map { String(format: "%.2f (~%.0f°)", $0, Self.turnDegrees(spread: $0)) } ?? "–") original=\((originalBytes ?? 0) / 1024)KB  [\(scores)]  \(museScore?.note ?? "")") }
+                            if Self.verboseLogging { print("  ✅ [\(n)] id=\(asset.localIdentifier.prefix(8)) MATCH\(held ? " (held)" : "")     d=\(String(format: "%.3f", distance)) cut=\(String(format: "%.2f", cutoff))  \(px) \(orient)  face=\(facePixels)px eyes=\(self?.lastEyeSpacing.map { String(format: "%.0f", $0) } ?? "?")px joints=\(body.lowerJoints)\(body.byKnees ? " knee-length" : "") type=\(type.rawValue) shoulders=\(body.shoulderSpread.map { String(format: "%.2f (~%.0f°)", $0, Self.turnDegrees(spread: $0)) } ?? "–") original=\((originalBytes ?? 0) / 1024)KB  [\(scores)]  \((orderFields["order"] as? Double).map { String(format: "order=%.3f  ", $0) } ?? "")\(museScore?.note ?? "")") }
                         }
                     }
 
@@ -1962,9 +2324,11 @@ extension ViewController {
                         // The page's progress still moves while known photos fly by.
                         if Date().timeIntervalSince(lastReport) > 0.25 || n == total {
                             lastReport = Date()
+                            let tierANow: [String: Int]? = Self.earlyStopEnabled ? tierA : nil
                             DispatchQueue.main.async {
-                                self?.sendToWeb(["type": "onGalleryScanProgress",
-                                                 "payload": ["done": n, "total": total]])
+                                var payload: [String: Any] = ["done": n, "total": total]
+                                if let tierANow { payload["tierA"] = tierANow }
+                                self?.sendToWeb(["type": "onGalleryScanProgress", "payload": payload])
                             }
                         }
                         return
@@ -2064,10 +2428,10 @@ extension ViewController {
                             }
                             return
                         }
+                        noImage += 1
                         // A thumbnail that failed the shape test fails it next time
                         // too; a photo with no thumbnail at all is tried again.
                         if note.hasPrefix("in iCloud"), self?.lastLoadThumbnail != nil { remember(asset, .cloudThumbnail) }
-                        noImage += 1
                         eval.note(asset, image: nil, gate: .noImage)
                         if Self.verboseLogging { print("  ⃠  [\(n)] no local image — \(note)") }
                         return
@@ -2080,11 +2444,18 @@ extension ViewController {
                     // much for "every Nth" to give a predictable update rate.
                     if Date().timeIntervalSince(lastReport) > 0.25 || n == total {
                         lastReport = Date()
+                        let tierANow: [String: Int]? = Self.earlyStopEnabled ? tierA : nil
                         DispatchQueue.main.async {
-                            self?.sendToWeb(["type": "onGalleryScanProgress",
-                                             "payload": ["done": n, "total": total]])
+                            var payload: [String: Any] = ["done": n, "total": total]
+                            if let tierANow { payload["tierA"] = tierANow }
+                            self?.sendToWeb(["type": "onGalleryScanProgress", "payload": payload])
                         }
                     }
+                    if tierAReached() { stoppedEarly = true }
+                }
+                if stoppedEarly {
+                    print("⏹ early stop at \(examined) of \(total) — Tier A selfie \(tierA["selfie"] ?? 0), front \(tierA["front"] ?? 0), side \(tierA["side"] ?? 0); \(total - examined) photo(s) not examined, iCloud pass skipped")
+                    break
                 }
             }
 
@@ -2108,7 +2479,10 @@ extension ViewController {
             let deadline = cloudPassStarted.addingTimeInterval(Self.cloudTail)
             let hardDeadline = cloudPassStarted.addingTimeInterval(Self.cloudTailMax)
             var cloudExtended = false
-            for job in cloudJobs {
+            // Stopped early: the slots are full, so the downloads are dropped — see
+            // `earlyStopEnabled`. The jobs count as left for the summary.
+            if stoppedEarly { cloudLeft += cloudJobs.count }
+            for job in (stoppedEarly ? [] : cloudJobs) {
                 guard self?.scanGeneration == generation else {
                     cloudQueue.cancelAllOperations()
                     print("\u{1f6d1} Scan superseded — stopping in the iCloud pass")
@@ -2221,9 +2595,34 @@ extension ViewController {
                 weakCut = true
                 if Self.verboseLogging { print("  ✂️  no gap and matches reach \(String(format: "%.3f", farthest)) — weak reference, cut tightened to \(String(format: "%.2f", Self.weakReferenceCut))") }
             }
+            // Capture date and time for the console lines below, so a photo that
+            // is not in the grid (withdrawn, or no match) can be found in Photos.
+            let takenFormat = DateFormatter()
+            takenFormat.dateFormat = "d MMM yyyy HH:mm"
+            func taken(_ id: String) -> String {
+                guard let date = PHAsset.fetchAssets(withLocalIdentifiers: [id], options: nil).firstObject?.creationDate else { return "taken ?" }
+                return "taken " + takenFormat.string(from: date)
+            }
+            // The own-photo keep — see `ownPhotoKeepEnabled`. A face's nearest
+            // distance to the sure matches, nil when it has none to compare.
+            let sureMatches = nearFaces.filter { $0.distance < Self.ownPhotoCore && matchedIds.contains($0.id) }
+            func nearestOwn(_ id: String) -> Float? {
+                guard let face = nearFaces.first(where: { $0.id == id }) else { return nil }
+                return sureMatches.filter { $0.id != id }.map { FaceRecognizer.distance(face.vector, $0.vector) }.min()
+            }
+            var ownKept: [String] = []
             if let cut = decidedCut {
                 gapCut = cut
                 gapDropped = matchedIds.filter { (matchScores[$0]?.distance ?? 0) >= cut }
+                if Self.ownPhotoKeepEnabled {
+                    ownKept = gapDropped.filter { (nearestOwn($0) ?? .infinity) < Self.ownPhotoKeepLimit }
+                    let keptSet = Set(ownKept)
+                    gapDropped.removeAll { keptSet.contains($0) }
+                    if Self.verboseLogging, !ownKept.isEmpty {
+                        let kept = ownKept.map { String(format: "%@ %.3f %@", String($0.prefix(8)), nearestOwn($0) ?? 0, taken($0)) }.joined(separator: ", ")
+                        print("  \u{1f9ed} own-photo keep — \(ownKept.count) match(es) above the cut stay, under \(String(format: "%.2f", Self.ownPhotoKeepLimit)) from a sure match  [\(kept)]")
+                    }
+                }
                 let droppedSet = Set(gapDropped)
                 matchedIds.removeAll { droppedSet.contains($0) }
                 for id in gapDropped {
@@ -2232,16 +2631,59 @@ extension ViewController {
                 }
                 eval.regate(droppedSet, to: .gapCut)
                 if Self.verboseLogging {
-                    let scores = gapDropped.compactMap { matchScores[$0]?.distance }.sorted()
-                        .map { String(format: "%.3f", $0) }.joined(separator: " ")
+                    let scores = gapDropped.compactMap { id in matchScores[id].map { (id, $0.distance) } }.sorted { $0.1 < $1.1 }
+                        .map { String(format: "id=%@ %.3f %@", String($0.0.prefix(8)), $0.1, taken($0.0)) }.joined(separator: ", ")
                     print("  ✂️  gap cut \(String(format: "%.3f", cut)) — withdrew \(gapDropped.count) match(es) scored above the gap  [\(scores)]")
                 }
             }
 
-            // The finished list is the streamed order, with the held-back matches
-            // appended after it, so tiles only ever appear.
+            // The own-photo check — see `ownPhotoLogEnabled`. Logged only: each
+            // face from the gap floor to the ceiling, with its nearest distance to
+            // the sure matches (shown, under `ownPhotoCore` to the selfie).
+            var ownCheckLine = "off"
+            if Self.ownPhotoLogEnabled {
+                let shown = Set(matchedIds)
+                let gapSet = Set(gapDropped)
+                let core = nearFaces.filter { $0.distance < Self.ownPhotoCore && shown.contains($0.id) }
+                var withdrawnNearest: [Float] = []
+                var keptNearest: [Float] = []
+                var strangerNearest: [Float] = []
+                for face in nearFaces.filter({ $0.distance >= Self.gapCutFloor }).sorted(by: { $0.distance < $1.distance }) {
+                    let others = core.filter { $0.id != face.id }
+                        .map { (id: $0.id, d: FaceRecognizer.distance(face.vector, $0.vector)) }
+                        .sorted { $0.d < $1.d }
+                    let status: String
+                    if !face.matched { status = "no match" }
+                    else if gapSet.contains(face.id) { status = "withdrawn by the gap rule" }
+                    else if ownKept.contains(face.id) { status = "kept by the own-photo keep" }
+                    else if shown.contains(face.id) { status = "kept" }
+                    else { status = "matched, hidden for another reason" }
+                    if let nearest = others.first {
+                        if !face.matched { strangerNearest.append(nearest.d) }
+                        else if gapSet.contains(face.id) { withdrawnNearest.append(nearest.d) }
+                        else if shown.contains(face.id) { keptNearest.append(nearest.d) }
+                    }
+                    if Self.verboseLogging {
+                        let near = others.prefix(3).map { String(format: "%.3f id=%@", $0.d, String($0.id.prefix(8))) }.joined(separator: ", ")
+                        let within = others.filter { $0.d < Self.ownPhotoCore }.count
+                        print("  \u{1f9ed} [\(face.n)] id=\(face.id.prefix(8)) d=\(String(format: "%.3f", face.distance)) \(face.type) \(status), \(taken(face.id)) — own photos: \(near.isEmpty ? "none to compare" : near); \(within) of \(others.count) under \(String(format: "%.2f", Self.ownPhotoCore))")
+                    }
+                }
+                func span(_ values: [Float]) -> String {
+                    guard let lo = values.min(), let hi = values.max() else { return "none" }
+                    return String(format: "%d, nearest %.3f–%.3f", values.count, lo, hi)
+                }
+                ownCheckLine = "\(core.count) sure match(es) under \(String(format: "%.2f", Self.ownPhotoCore)); nearest own photo for withdrawn \(span(withdrawnNearest)) · kept \(span(keptNearest)) · no match under \(String(format: "%.2f", Self.gapCutCeiling)) \(span(strangerNearest))"
+            }
+
+            // The finished list is the streamed order: newest first, iCloud selfies
+            // after the local pass. Nothing moves when the scan ends — the page keeps
+            // the tiles where the tester watched them arrive, and the matches held
+            // back for the gap rule go after them, so they only ever appear.
             let heldSet = Set(heldIds)
             let ordered = matchedIds.filter { !heldSet.contains($0) } + matchedIds.filter { heldSet.contains($0) }
+                // Excluded matches last, after everything shown — see `sendExcludedMatches`.
+                + excludedIds
 
             // Capture dates of the final matches, for the scan summary. The scan runs
             // newest first, so "first" is the newest match and "last" the oldest.
@@ -2251,6 +2693,17 @@ extension ViewController {
             }
             let matchedFirstDate = Self.captureDay(matchedDates.max())
             let matchedLastDate = Self.captureDay(matchedDates.min())
+
+            // Selfies by tier, among the final matches — see `selfieScoreV2`.
+            let tiers = matchedIds.compactMap { matchScores[$0]?.breakdown?["tier"] as? String }
+            let selfieTiers = matchedIds.filter { matchScores[$0]?.type == .selfie }.compactMap { matchScores[$0]?.breakdown?["tier"] as? String }
+            let bodyIds = matchedIds.filter { matchScores[$0]?.type != .selfie }
+            let bodyTiers = bodyIds.compactMap { matchScores[$0]?.breakdown?["tier"] as? String }
+            var tierALine = selfieTiers.isEmpty ? "" : "\n                selfie tier A \(selfieTiers.filter { $0 == "A" }.count), B \(selfieTiers.filter { $0 == "B" }.count)   (v2 score T, Tier A at \(String(format: "%.2f", Self.tierALine)) and over; only Tier A selfies are pre-selected)"
+            if Self.fullLengthScoreV2, !bodyIds.isEmpty {
+                tierALine += "\n                full-length tier A \(bodyTiers.filter { $0 == "A" }.count), B \(bodyTiers.filter { $0 == "B" }.count), under the floor \(bodyIds.count - bodyTiers.count)   (v2 body score, Tier A at \(String(format: "%.2f", Self.fullLengthTierALine)), usable from \(String(format: "%.2f", Self.fullLengthUsableFloor)); Tier B fills a shortfall)"
+            }
+            _ = tiers
 
             // Built here, off the main thread. The grid is passed in the order the
             // web will show it, because that order is what "the top" means.
@@ -2264,7 +2717,7 @@ extension ViewController {
                 ==============================
                 SCAN COMPLETE
                 ==============================
-                examined    \(examined) of \(total) in window
+                examined    \(examined) of \(total) in window\(stoppedEarly ? "   (stopped early: Tier A selfie \(tierA["selfie"] ?? 0), front \(tierA["front"] ?? 0), side \(tierA["side"] ?? 0) reached \(Self.earlyStopTierA["selfie"] ?? 0)/\(Self.earlyStopTierA["front"] ?? 0)/\(Self.earlyStopTierA["side"] ?? 0) after at least \(Self.earlyStopMinExamined) photos; \(total - examined) not examined, iCloud pass skipped)" : "")
                 reference   \(self?.lastReferenceNote ?? "")
                 no image    \(noImage)   (in iCloud with no usable copy on the phone, or unreadable)
                 skipped     \(skippedShape)   (from the library record alone: too small to scan, or a panorama)
@@ -2277,18 +2730,20 @@ extension ViewController {
                 not full body \(notFullBody)   (not head to toe: head, \(Self.minAnkles)+ ankle, \(Int(Self.minBodySpan * 100))% span or \(Int(Self.minBodySpanBothAnkles * 100))% with both ankles, feet in frame\(Self.kneeLengthEnabled ? " — nor head to knee: \(Self.minKnees)+ knee, \(Int(Self.minKneeSpan * 100))% span or \(Int(Self.minKneeSpanBothKnees * 100))% with both knees, knees \(String(format: "%.1f", Self.minKneeDrop)) torso below the hips" : "; the knee rule is off, so a head-to-knee photo counts here"))
                 body retry  \(bodyRetried) re-checked at \(Int(Self.fullResPixels))px after a face match, \(bodyRescued) rescued
                 no match    \(noMatch)   (\(earlyNoMatch) decided from the face alone, before body pose)
-                gap cut     \(gapCut.map { String(format: "%.3f", $0) } ?? "none")\(weakCut ? " (weak reference fallback)" : "")   (\(gapDropped.count) withdrawn: matched under \(String(format: "%.2f", Self.matchThreshold)) but above the gap between the shopper's photos and the rest; \(heldIds.count) held back until the end, \(heldIds.count - gapDropped.count) of them shown)
+                gap cut     \(gapCut.map { String(format: "%.3f", $0) } ?? "none")\(weakCut ? " (weak reference fallback)" : "")   (\(gapDropped.count) withdrawn: matched under \(String(format: "%.2f", Self.matchThreshold)) but above the gap between the shopper's photos and the rest; \(heldIds.count) held back until the end, \(heldIds.count - gapDropped.count) of them shown; \(Self.ownPhotoKeepEnabled ? "\(ownKept.count) kept as under \(String(format: "%.2f", Self.ownPhotoKeepLimit)) from a sure match" : "own-photo keep off"))
+                own check   \(ownCheckLine)   (logged only)
                 sensitive   \(sensitiveSkipped)   (matched, then filtered)
                 unusable    \(unusableFace)   (matched, but the face is no use for the Muse: sunglasses, hand over it, eyes closed or a wink, cut by the frame, blurred\(Self.selfieGatesV2 ? "; v2 selfie gates: head pitched or turned, mouth open, teeth, exposure, too close, no camera data, eyes under usual" : ""))
                 gates       \(unusableGates.isEmpty ? "none" : unusableGates.sorted { $0.value > $1.value }.map { "\($0.key) \($0.value)" }.joined(separator: ", "))\(eyeBaseline.map { String(format: "; usual eye openness %.2f", $0) } ?? "")
                 2b facts    \(coverHints) matched selfie(s) with a scarf, mask, hood, earmuffs, headphones or tiara label (not filtered yet); focal length assumed on \(focalAssumed); segmenter read on \(coverRead) selfie(s): over the cover limits hairline \(coverFacts["hairline", default: 0]) (≥ \(Self.coverHairlineLimit)), jaw \(coverFacts["jaw", default: 0]) (≥ \(Self.coverJawLimit)), face \(coverFacts["face", default: 0]) (≥ \(Self.coverFaceLimit))\(Self.coverGatesEnabled ? "" : " — gates off, counted only")
+                documents   of \(documentRead) matched photo(s) read: document labels sum ≥ \(Self.documentLabelSumLimit) on \(documentLabelled), handwriting ≥ \(Self.handwritingLimit) on \(handwritten), labels ≥ \(Self.documentPageLabelLimit) with the face on a page under \(Int(Self.documentPageAreaLimit * 100))% of the frame on \(faceOnPage) more\(Self.documentGateEnabled ? " (all gated)" : " (gate off, counted only)"); logged only: face on a detected document (≥ \(Self.documentConfidenceLog)) on \(faceOnDocument), text over \(Int(Self.documentTextShareLog * 100))% of the frame on \(textHeavy)
                 too large   \(tooLargeSkipped)   (original over \(Original.byteCap / 1_048_576)MB — hidden, nothing is sent compressed)
                 no original \(noOriginal)   (original unreadable or not downloaded in time; \(sizedByPixels) too slow to size but shown on pixel count)
                 low data    \(lowDataSkipped)   (only in iCloud, not downloaded — Low Data Mode is on)
                 sized       \(sized) original(s), \(downloadedToSize) from iCloud, \(String(format: "%.1f", sizingSeconds))s
                 store       \(store == nil ? "off" : "\(storeDecided) decided without loading, \(storeCloudSkipped) iCloud skipped, \(store?.written ?? 0) written, \(store?.count ?? 0) remembered")
                 duplicates  \(duplicates)   (matches that repeat an earlier one; shown, but only one of each is pre-selected)
-                MATCHED     \(matchedIds.count)   (selfie \(found[.selfie, default: 0]), front \(found[.front, default: 0]), three-quarter \(found[.threeQuarter, default: 0]), side \(found[.side, default: 0]); \(kneeLength) in on the knee rule; \(selfieSmallEyes) selfie(s) under \(Int(Self.selfieEyeSpacingPixels))px eye spacing\(Self.selfieEyeFloorEnabled ? "" : " — floor off, counted only"))
+                MATCHED     \(matchedIds.count)   (selfie \(found[.selfie, default: 0]), front \(found[.front, default: 0]), three-quarter \(found[.threeQuarter, default: 0]), side \(found[.side, default: 0]); \(kneeLength) in on the knee rule; \(selfieSmallEyes) selfie(s) under \(Int(Self.selfieEyeSpacingPixels))px eye spacing\(Self.selfieEyeFloorEnabled ? "" : " — floor off, counted only"))\(tierALine)
                 elapsed     \(String(format: "%.1f", elapsed))s  (\(String(format: "%.0f", rate))/s)
                 memory      \(memoryAtStart)MB at start, peak \(max(memoryPeak, Self.residentMB()))MB during the scan (this process; the web view's process is separate)
                 stages      \((self?.stageMs ?? [:]).sorted { $0.key < $1.key }.map { "\($0.key) \(String(format: "%.1f", $0.value / 1000))s" }.joined(separator: " · "))
@@ -2323,6 +2778,7 @@ extension ViewController {
                 summary["gapCut"] = gapCut
                 summary["weakCut"] = weakCut
                 summary["gapDropped"] = gapDropped.count
+                summary["ownKept"] = ownKept.count
                 summary["gapHeld"] = heldIds.count
                 summary["sensitive"] = sensitiveSkipped
                 summary["unusableFace"] = unusableFace
@@ -2545,6 +3001,18 @@ struct MuseScore {
     /// Any of cap, smile, wide-eyed or `lowered`: the photo sits in the lower
     /// score band, and its distance is left out of the gap rule.
     let demoted: Bool
+    /// Under `ViewController.selfieScoreV2`, a selfie's tier, "A" or "B", and
+    /// what held each of its groups under 1, for the console. Nil and empty
+    /// for every other photo, and for a selfie a gate ruled out.
+    let tier: String?
+    let reasons: [String]
+    /// Under `ViewController.selfieScoreV2`, eyes held wide or raised brows —
+    /// see `ViewController.wideEyesLine`. Sent as `wideEyes`.
+    let wideEyesV2: Bool
+    /// Under `ViewController.fullLengthScoreV2`, the body score of a front,
+    /// three-quarter or side; it supplies the value, parts and tier, and the
+    /// face filters stand down. Nil for selfies and with the switch off.
+    let body: BodyScore?
     /// What the shopper wears — see `outfitMultiplier`.
     struct Outfit {
         /// The strongest of `dressyLabels` over the whole photo, if any.
@@ -2552,10 +3020,54 @@ struct MuseScore {
         let dressy: Float
         /// Edge density of the clothing below the face, 0–1.
         let busy: Float
+        /// Every whole-photo label at `ViewController.fullLengthLabelFloor` or
+        /// over, strongest first — see `fullLengthLabelLog`. Empty when off.
+        var labels: [(label: String, confidence: Float)] = []
+        /// The whole-photo labels `ViewController.garmentCaps` knows, at any
+        /// confidence over 0.1, strongest first.
+        var garments: [(label: String, confidence: Float)] = []
     }
     let outfit: Outfit
     let dressy: Bool
     let busy: Bool
+    /// What says "document" about the whole photo — see
+    /// `ViewController.documentReadEnabled`; the gate is
+    /// `ViewController.documentGateEnabled`.
+    struct DocumentRead {
+        /// The classifier's strongest labels over the whole photo, best first.
+        let scene: [(label: String, confidence: Float)]
+        /// Text boxes Vision found, and the share of the frame they cover, 0–1.
+        let textBoxes: Int
+        let textArea: Float
+        /// Vision's document segmentation: how sure it is that a flat document
+        /// (a page, card or print) is in the photo, the share of the frame it
+        /// covers, and whether the matched face sits inside it. A passport page
+        /// read 0.94, 0.39 of the frame, face inside; two selfies read 0.00.
+        let docConfidence: Float
+        let docArea: Float
+        let faceInDoc: Bool
+        /// The document-like labels at 0.01 or more, best first, their sum and
+        /// the handwriting score — see `ViewController.documentLabels`.
+        let docLabels: [(label: String, confidence: Float)]
+        var labelSum: Float { docLabels.reduce(0) { $0 + $1.confidence } }
+        var handwriting: Float { docLabels.first { $0.label == "handwriting" }?.confidence ?? 0 }
+        /// The second document rule — see `ViewController.documentPageLabelLimit`:
+        /// some document labels, and a page that holds the face without being
+        /// the whole picture.
+        var faceOnPage: Bool {
+            labelSum >= ViewController.documentPageLabelLimit
+                && docConfidence >= ViewController.documentConfidenceLog && faceInDoc
+                && docArea < ViewController.documentPageAreaLimit
+        }
+        var note: String {
+            let labels = scene.map { String(format: "%@ %.2f", $0.label, $0.confidence) }.joined(separator: " ")
+            let docs = docLabels.map { String(format: "%@ %.2f", $0.label, $0.confidence) }.joined(separator: " ")
+            return String(format: "scene %@; doc labels sum %.2f (%@), handwriting %.2f; text %d box(es) %.2f of frame; document %.2f, %.2f of frame, face %@",
+                          labels.isEmpty ? "none" : labels, labelSum, docs.isEmpty ? "none" : docs, handwriting,
+                          textBoxes, textArea, docConfidence, docArea, faceInDoc ? "inside" : "outside")
+        }
+    }
+    let document: DocumentRead?
     /// The raw readings the parts were worked out from: angles in degrees, face
     /// width in pixels, the rest as the detectors report them. Sent in
     /// `breakdown` as `scoreInputs`.
@@ -2718,7 +3230,7 @@ struct MuseScore {
     init(face: VNFaceObservation, in image: CGImage, handler: VNImageRequestHandler, faceWidth: CGFloat,
          expression: FaceExpression? = nil, labels: [String: Float] = [:], handOnFace: Bool = false,
          outfit: Outfit = Outfit(label: nil, dressy: 0, busy: 0), selfie: Bool = false, gates: SelfieGates? = nil,
-         coverReader: (() -> FaceCover?)? = nil) {
+         coverReader: (() -> FaceCover?)? = nil, document: DocumentRead? = nil, body: BodyScore? = nil) {
         let clamp = { (v: Float) in max(0, min(1, v)) }
         var parts: [(name: String, value: Float)] = []
         var filter: String?
@@ -2726,9 +3238,17 @@ struct MuseScore {
         var wideEyed = false
         var lowered: [String] = []
 
+        // A document, not a photo of the person — see
+        // `ViewController.documentGateEnabled`. First, so the summary names it.
+        if ViewController.documentGateEnabled, let document {
+            if document.labelSum >= ViewController.documentLabelSumLimit { filter = "document" }
+            else if document.handwriting >= ViewController.handwritingLimit { filter = "handwriting" }
+            else if document.faceOnPage { filter = "document" }
+        }
+
         // What covers the face. Sunglasses and a hand rule the photo out of the
         // ranking; a cap only pulls it down — see `capMultiplier`.
-        if (labels["sunglasses"] ?? 0) >= Self.sunglassesConfidence { filter = "sunglasses" }
+        if (labels["sunglasses"] ?? 0) >= Self.sunglassesConfidence { filter = filter ?? "sunglasses" }
         if handOnFace { filter = filter ?? "hand over face" }
         let capped = labels.contains { Self.hatLabels.contains($0.key) && $0.value >= Self.hatConfidence }
 
@@ -2935,6 +3455,10 @@ struct MuseScore {
             readings["squint"] = fixed(e.squint, 2)
             readings["eyeWide"] = fixed(e.eyeWide, 2)
             readings["teeth"] = fixed(e.teeth, 2)
+            readings["pucker"] = fixed(e.pucker, 2)
+            readings["funnel"] = fixed(e.funnel, 2)
+            readings["press"] = fixed(e.press, 2)
+            readings["browDown"] = fixed(e.browDown, 2)
         }
         if let cm = cameraCm { readings["cameraCm"] = fixed(cm, 1) }
         if let gates {
@@ -2951,8 +3475,6 @@ struct MuseScore {
         }
         self.readings = readings
 
-        self.parts = parts
-        self.filter = filter
         self.expression = expression
         self.labels = labels
         self.handOnFace = handOnFace
@@ -2963,6 +3485,7 @@ struct MuseScore {
         self.wideEyed = wideEyed
         self.lowered = lowered
         self.outfit = outfit
+        self.document = document
         let dressy = outfit.dressy >= Self.dressyConfidence
         let busy = outfit.busy >= Self.busyTorso
         self.dressy = dressy
@@ -2978,11 +3501,115 @@ struct MuseScore {
         if wideEyed { multiplier *= Self.wideEyedMultiplier }
         for _ in lowered { multiplier *= Self.loweredMultiplier }
         let demoted = multiplier < 1
-        self.demoted = demoted
+        // Under the v2 full-length score nothing on the face demotes the photo.
+        self.demoted = body == nil && demoted
         if dressy { multiplier *= Self.outfitMultiplier }
         if busy { multiplier *= Self.outfitMultiplier }
         let banded = demoted ? 0.5 * weighted * multiplier : 0.5 + 0.5 * weighted * multiplier
-        self.value = filter == nil ? banded : 0
+
+        // The v2 selfie score — see `ViewController.selfieScoreV2`. `gates` is
+        // passed for selfies only. Replaces the parts, bands and multipliers.
+        var tier: String?
+        var reasons: [String] = []
+        var wideEyesV2 = false
+        if ViewController.selfieScoreV2, let gates {
+            typealias V = ViewController
+            // 1 at `good` or better, 0 at `bad` or worse, a straight line between.
+            func ramp(_ value: Float, _ curve: (good: Float, bad: Float)) -> Float {
+                clamp((value - curve.bad) / (curve.good - curve.bad))
+            }
+            // The lowest of a group's signals, and what it was.
+            func lowest(_ signals: [(why: String, value: Float)]) -> Float {
+                guard let low = signals.min(by: { $0.value < $1.value }) else { return 1 }
+                if low.value < 1 { reasons.append(low.why) }
+                return low.value
+            }
+            var poseSignals: [(String, Float)] = [
+                (String(format: "pitch %.0f°", pitch), ramp(pitch, V.posePitch)),
+                (String(format: "yaw %.0f°", yaw), ramp(yaw, V.poseYaw)),
+                (String(format: "roll %.0f°", roll), ramp(roll, V.poseRoll)),
+            ]
+            if let cm = cameraCm { poseSignals.append((String(format: "camera %.0f cm", cm), ramp(cm, V.poseDistance))) }
+            let poseGroup = lowest(poseSignals)
+
+            var lightSignals: [(String, Float)] = []
+            if let f = faceStats {
+                let bright = max(f.left, f.right), dark = max(min(f.left, f.right), 0.01)
+                lightSignals.append((String(format: "uneven light %.1f×", bright / dark), ramp(bright / dark, V.lightEvenness)))
+                if let whole = imageStats {
+                    let ratio = f.mean / max(whole.mean, 0.01)
+                    lightSignals.append((String(format: "backlit %.2f", ratio), ramp(ratio, V.lightBacklight)))
+                }
+                lightSignals.append((String(format: "blown %.0f%%", f.blown * 100), ramp(f.blown, V.lightClipped)))
+                let cast: Float = (f.r >= f.g && f.g >= f.b) ? (f.r - f.b > 0.5 ? 0.7 : 1) : 0.6
+                lightSignals.append(("colour cast", cast))
+            }
+            let lightGroup = lowest(lightSignals)
+
+            // Scores 1 until measured — plan, item 3 decisions.
+            let gazeGroup: Float = 1
+
+            var expressionSignals: [(String, Float)] = []
+            if smile == .closed { expressionSignals.append(("closed smile", V.expressionCapped)) }
+            if smile == .open { expressionSignals.append(("open smile", V.expressionOpenSmile)) }
+            let wideEyes = wideEyed || (expression?.eyeWide ?? 0) >= V.wideEyesLine
+            if wideEyes { expressionSignals.append(("wide-eyed", V.expressionCapped)) }
+            if let e = expression {
+                if e.pucker >= V.puckerLimit { expressionSignals.append((String(format: "pucker %.2f", e.pucker), V.expressionCapped)) }
+                if e.browDown >= V.frownLimit { expressionSignals.append((String(format: "frown %.2f", e.browDown), V.expressionCapped)) }
+            }
+            let expressionGroup = lowest(expressionSignals)
+
+            var visibilitySignals: [(String, Float)] = []
+            if let cover { visibilitySignals.append((String(format: "face %.0f%% visible", (1 - cover.face) * 100), ramp(1 - cover.face, V.visibilityShare))) }
+            if (labels["eyeglasses"] ?? 0) >= V.glassesConfidence { visibilitySignals.append(("glasses", V.glassesCap)) }
+            let visibilityGroup = lowest(visibilitySignals)
+
+            var detailSignals: [(String, Float)] = [(String(format: "sharpness %.2f", sharp), sharp)]
+            if let eyes = gates.eyeSpacingOriginal { detailSignals.append((String(format: "eyes %.0f px apart", eyes), ramp(eyes, V.detailEyeSpacing))) }
+            let detailGroup = lowest(detailSignals)
+
+            let groups: [Float] = [poseGroup, lightGroup, gazeGroup, expressionGroup, visibilityGroup, detailGroup]
+            let t = zip(V.scoreWeightsV2, groups).reduce(Float(1)) { $0 * pow($1.1, $1.0.weight) }
+            self.parts = zip(V.scoreWeightsV2, groups).map { ($0.name, $1) }
+            self.value = filter == nil ? t : 0
+            let eyesTooSmall = (gates.eyeSpacingOriginal ?? .infinity) < V.tierAEyeSpacingMin
+            // Already named when it was the detail group's lowest signal.
+            let eyesWhy = String(format: "eyes %.0f px apart", gates.eyeSpacingOriginal ?? 0)
+            if eyesTooSmall, !reasons.contains(eyesWhy) { reasons.append(eyesWhy) }
+            if filter == nil { tier = t >= V.tierALine && !eyesTooSmall ? "A" : "B" }
+            wideEyesV2 = wideEyes
+        } else if let body {
+            // The v2 full-length score: the face only had to match. Its filters
+            // stand down, bar the document gate; the body's own gates apply.
+            if let f = filter, f != "document", f != "handwriting" { filter = nil }
+            filter = filter ?? body.filter
+            self.parts = body.parts
+            // The outfit multiplier lowers the value, and the tier follows the
+            // final value — see `fullLengthOutfitMultiplier`: a busy print hides
+            // the body shape as much as a loose fit does, so a photo it pulls
+            // under the Tier A line is Tier B.
+            var outfitMultiplier: Float = 1
+            if ViewController.fullLengthOutfitMultiplier {
+                if dressy, !ViewController.garmentCapsEnabled { outfitMultiplier *= Self.outfitMultiplier }
+                if busy { outfitMultiplier *= Self.outfitMultiplier }
+            }
+            let finalValue = body.value * outfitMultiplier
+            self.value = filter == nil ? finalValue : 0
+            if filter == nil, body.tier != nil {
+                tier = finalValue >= ViewController.fullLengthTierALine ? "A"
+                    : (finalValue >= ViewController.fullLengthUsableFloor ? "B" : nil)
+            }
+            reasons = body.reasons
+        } else {
+            self.parts = parts
+            self.value = filter == nil ? banded : 0
+        }
+        self.filter = filter
+        self.tier = tier
+        self.reasons = reasons
+        self.wideEyesV2 = wideEyesV2
+        self.body = body
     }
 
     /// For the console: the value, then every part, or the filter that zeroed it.
@@ -2998,19 +3625,35 @@ struct MuseScore {
         extraParts.append(cameraCm.map { String(format: "camera %.0fcm (%@%@)", $0, cameraFrom ?? "", focalAssumed ? ", focal assumed" : "") })
         extraParts.append(cameraDetail.map { "meta " + $0 })
         extraParts.append(cover?.note)
-        extraParts.append(capped ? "cap ×\(Self.capMultiplier)" : nil)
         extraParts.append(String(format: "head yaw %.0f° pitch %.0f°", headDegrees.yaw, headDegrees.pitch))
-        extraParts.append(tilted ? "tilted ×\(Self.tiltMultiplier)" : nil)
-        extraParts.append(smile == .closed ? "closed smile ×\(Self.closedSmileMultiplier)" : nil)
-        extraParts.append(smile == .open ? "open smile ×\(Self.openSmileMultiplier)" : nil)
-        extraParts.append(wideEyed ? "wide-eyed ×\(Self.wideEyedMultiplier)" : nil)
-        extraParts.append(lowered.isEmpty ? nil : lowered.map { "\($0) ×\(Self.loweredMultiplier)" }.joined(separator: "; "))
-        extraParts.append(dressy ? "\(outfit.label ?? "dressy") \(String(format: "%.2f", outfit.dressy)) ×\(Self.outfitMultiplier)" : nil)
-        extraParts.append(busy ? "busy torso \(String(format: "%.2f", outfit.busy)) ×\(Self.outfitMultiplier)" : nil)
+        if let body {
+            extraParts.append(body.note)
+            if ViewController.fullLengthOutfitMultiplier {
+                extraParts.append(dressy && !ViewController.garmentCapsEnabled ? "\(outfit.label ?? "dressy") \(String(format: "%.2f", outfit.dressy)) ×\(Self.outfitMultiplier)" : nil)
+                extraParts.append(busy ? "busy torso \(String(format: "%.2f", outfit.busy)) ×\(Self.outfitMultiplier)" : nil)
+            }
+            if !outfit.labels.isEmpty {
+                extraParts.append("labels " + outfit.labels.map { String(format: "%@ %.2f", $0.label, $0.confidence) }.joined(separator: " "))
+            }
+        } else if tier != nil {
+            // The v2 score has no multipliers: what held each group down instead.
+            extraParts.append(reasons.isEmpty ? nil : "held down by " + reasons.joined(separator: ", "))
+        } else {
+            extraParts.append(capped ? "cap ×\(Self.capMultiplier)" : nil)
+            extraParts.append(tilted ? "tilted ×\(Self.tiltMultiplier)" : nil)
+            extraParts.append(smile == .closed ? "closed smile ×\(Self.closedSmileMultiplier)" : nil)
+            extraParts.append(smile == .open ? "open smile ×\(Self.openSmileMultiplier)" : nil)
+            extraParts.append(wideEyed ? "wide-eyed ×\(Self.wideEyedMultiplier)" : nil)
+            extraParts.append(lowered.isEmpty ? nil : lowered.map { "\($0) ×\(Self.loweredMultiplier)" }.joined(separator: "; "))
+            extraParts.append(dressy ? "\(outfit.label ?? "dressy") \(String(format: "%.2f", outfit.dressy)) ×\(Self.outfitMultiplier)" : nil)
+            extraParts.append(busy ? "busy torso \(String(format: "%.2f", outfit.busy)) ×\(Self.outfitMultiplier)" : nil)
+        }
+        extraParts.append(document?.note)
         let extras = extraParts.compactMap { $0 }.joined(separator: "; ")
         if let filter { return String(format: "score=0 (%@)%@", filter, extras.isEmpty ? "" : "  " + extras) }
         let detail = parts.map { String(format: "%@ %.2f", $0.name, $0.value) }.joined(separator: " ")
-        return String(format: "score=%.2f [%@]%@", value, detail, extras.isEmpty ? "" : "  " + extras)
+        let tierNote = tier.map { " tier \($0)" } ?? ""
+        return String(format: "score=%.2f%@ [%@]%@", value, tierNote, detail, extras.isEmpty ? "" : "  " + extras)
     }
 
     /// For the page's analytics, sent with the match next to `score`: each part,
@@ -3028,9 +3671,20 @@ struct MuseScore {
         if busy { penalties.append("busy") }
         var fields: [String: Any] = [
             "scoreParts": Dictionary(parts.map { ($0.name, (Double($0.value) * 100).rounded() / 100) }) { _, last in last },
-            "scorePenalties": penalties,
             "scoreInputs": readings,
         ]
+        // Under the v2 selfie score the parts are its six groups and the
+        // penalties are gone; `tier` tells the page what it may pre-select.
+        if let tier { fields["tier"] = tier } else if body == nil { fields["scorePenalties"] = penalties }
+        if let body {
+            var inputs = readings
+            for (k, v) in body.readings { inputs[k] = (v * 1000).rounded() / 1000 }
+            fields["scoreInputs"] = inputs
+            fields["usable"] = tier != nil
+            // The clothing colour, for the page's session rule — item 5c.
+            if let outfit = body.outfit { fields["outfit"] = outfit }
+        }
+        if wideEyesV2 { fields["wideEyes"] = true }
         if let filter { fields["scoreFilter"] = filter }
         return fields
     }
@@ -3042,9 +3696,11 @@ struct MuseScore {
             .intersection(CGRect(x: 0, y: 0, width: 1, height: 1))
     }
 
-    /// Luminance and colour statistics of one region, from a small square copy:
-    /// mean, clipping, half means, average colour and Laplacian variance.
-    static func stats(of image: CGImage, region: CGRect, side: Int) -> (mean: Float, clipped: Float, left: Float, right: Float, r: Float, g: Float, b: Float, laplacian: Float)? {
+    /// Luminance and colour statistics of one region of the image, read from a
+    /// small square copy: mean, clipped fraction (blown or black), blown
+    /// fraction (bright only), left and right half means, average colour, and
+    /// the Laplacian variance for sharpness.
+    static func stats(of image: CGImage, region: CGRect, side: Int) -> (mean: Float, clipped: Float, blown: Float, left: Float, right: Float, r: Float, g: Float, b: Float, laplacian: Float)? {
         let w = CGFloat(image.width), h = CGFloat(image.height)
         // Vision's region has its origin at the bottom; CGImage cropping at the top.
         let rect = CGRect(x: region.minX * w, y: (1 - region.maxY) * h, width: region.width * w, height: region.height * h).integral
@@ -3057,12 +3713,13 @@ struct MuseScore {
         ctx.draw(cropped, in: CGRect(x: 0, y: 0, width: side, height: side))
 
         var lum = [Float](repeating: 0, count: side * side)
-        var sumR: Float = 0, sumG: Float = 0, sumB: Float = 0, clipped: Float = 0, left: Float = 0, right: Float = 0
+        var sumR: Float = 0, sumG: Float = 0, sumB: Float = 0, clipped: Float = 0, blown: Float = 0, left: Float = 0, right: Float = 0
         for i in 0..<(side * side) {
             let r = Float(pixels[i * 4]) / 255, g = Float(pixels[i * 4 + 1]) / 255, b = Float(pixels[i * 4 + 2]) / 255
             let y = 0.299 * r + 0.587 * g + 0.114 * b
             lum[i] = y; sumR += r; sumG += g; sumB += b
             if y > 0.96 || y < 0.04 { clipped += 1 }
+            if y > 0.96 { blown += 1 }
             if i % side < side / 2 { left += y } else { right += y }
         }
         let n = Float(side * side)
@@ -3076,7 +3733,7 @@ struct MuseScore {
         }
         let m = Float((side - 2) * (side - 2))
         let lapMean = lapSum / m
-        return (mean: (sumR * 0.299 + sumG * 0.587 + sumB * 0.114) / n, clipped: clipped / n,
+        return (mean: (sumR * 0.299 + sumG * 0.587 + sumB * 0.114) / n, clipped: clipped / n, blown: blown / n,
                 left: left / (n / 2), right: right / (n / 2), r: sumR / n, g: sumG / n, b: sumB / n,
                 laplacian: lapSq / m - lapMean * lapMean)
     }
@@ -3818,8 +4475,11 @@ enum Original {
 
     static func camera(for asset: PHAsset) -> Camera? {
         let resources = PHAssetResource.assetResources(for: asset)
-        guard let resource = resources.first(where: { $0.type == .fullSizePhoto })
-                ?? resources.first(where: { $0.type == .photo }) else { return nil }
+        // The original first (GALLERY_PICK_V2_PLAN.md, item 4): an edit saved by
+        // another app can drop the metadata, and an edited photo must not fail
+        // the no-camera-data gate for being edited.
+        guard let resource = resources.first(where: { $0.type == .photo })
+                ?? resources.first(where: { $0.type == .fullSizePhoto }) else { return nil }
         let options = PHAssetResourceRequestOptions()
         options.isNetworkAccessAllowed = false
         let lock = NSLock()
@@ -4381,6 +5041,24 @@ extension ViewController {
 
 extension ViewController {
 
+    /// See `saveReferenceFrames`. Frames go to Documents/selfie-frames/frame-N.jpg,
+    /// in the order the page sent them (the tapped frame first).
+    static func saveFrames(_ frames: [UIImage]) {
+        guard let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { return }
+        let folder = documents.appendingPathComponent("selfie-frames", isDirectory: true)
+        try? FileManager.default.removeItem(at: folder)
+        do {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            for (i, frame) in frames.enumerated() {
+                guard let data = frame.jpegData(compressionQuality: 0.95) else { continue }
+                try data.write(to: folder.appendingPathComponent("frame-\(i + 1).jpg"))
+            }
+            print("🗂️ \(frames.count) selfie frame(s) saved to Files → On My iPhone → photoApp → selfie-frames")
+        } catch {
+            print("🗂️ Could not save selfie frames: \(error.localizedDescription)")
+        }
+    }
+
     /// Decodes a `data:image/jpeg;base64,...` string.
     static func image(fromDataURI uri: String) -> UIImage? {
         guard let comma = uri.firstIndex(of: ","),
@@ -4455,6 +5133,7 @@ extension ViewController {
         lastLoadFromCloud = loaded?.fromCloud ?? false
         lastLoadThumbnail = loaded?.thumbnail
     }
+
     func loadPhoto(asset: PHAsset, pixels: CGFloat = ViewController.loadPixels) -> UIImage? {
         let loaded = loadPhotoResult(asset: asset, pixels: pixels)
         applyLoad(loaded)
@@ -4689,7 +5368,8 @@ extension ViewController {
     /// What the Muse score needs for one matched photo: expression and labels from the
     /// head crop, a hand over the face, and the outfit. Well under 100ms together.
     func museContext(face: VNFaceObservation, in image: CGImage, handler: VNImageRequestHandler, readCover: Bool = false)
-        -> (expression: FaceExpression?, labels: [String: Float], handOnFace: Bool, outfit: MuseScore.Outfit, coverReader: (() -> FaceCover?)?) {
+        -> (expression: FaceExpression?, labels: [String: Float], handOnFace: Bool, outfit: MuseScore.Outfit, coverReader: (() -> FaceCover?)?,
+            document: MuseScore.DocumentRead?) {
         let head = MuseScore.headBox(face.boundingBox)
         let w = CGFloat(image.width), h = CGFloat(image.height)
         let headRect = CGRect(x: head.minX * w, y: (1 - head.maxY) * h, width: head.width * w, height: head.height * h).integral
@@ -4770,12 +5450,41 @@ extension ViewController {
         if torsoRect.width > 8, torsoRect.height > 8, let torsoCrop = image.cropping(to: torsoRect) {
             busy = timed("score.busy") { MuseScore.busyness(of: torsoCrop) }
         }
+        // Document facts — see `documentReadEnabled`: the classifier's top
+        // labels over the whole photo (already computed above) and how much of
+        // the frame Vision's text detector covers.
+        var document: MuseScore.DocumentRead?
+        if Self.documentReadEnabled {
+            let scene = (whole.results ?? []).prefix(4).map { (label: $0.identifier, confidence: $0.confidence) }
+            let docLabels = (whole.results ?? []).filter { Self.documentLabels.contains($0.identifier) && $0.confidence >= 0.01 }
+                .map { (label: $0.identifier, confidence: $0.confidence) }
+            let text = VNDetectTextRectanglesRequest()
+            let page = VNDetectDocumentSegmentationRequest()
+            timed("score.text") { try? handler.perform([text, page]) }
+            let boxes = text.results ?? []
+            let area = boxes.reduce(Float(0)) { $0 + Float($1.boundingBox.width * $1.boundingBox.height) }
+            let found = page.results?.first
+            let pageBox = found?.boundingBox ?? .zero
+            document = MuseScore.DocumentRead(scene: scene, textBoxes: boxes.count, textArea: min(area, 1),
+                                              docConfidence: found?.confidence ?? 0,
+                                              docArea: Float(pageBox.width * pageBox.height),
+                                              faceInDoc: pageBox.contains(CGPoint(x: face.boundingBox.midX, y: face.boundingBox.midY)),
+                                              docLabels: docLabels)
+        }
         if Self.scoreInParallel {
             expressionGroup.wait()
             expression = expressionResult
             stageMs["score.expression", default: 0] += expressionMs
         }
-        return (expression, labels, handOnFace, MuseScore.Outfit(label: dressyLabel, dressy: dressy, busy: busy), coverReader)
+        var outfit = MuseScore.Outfit(label: dressyLabel, dressy: dressy, busy: busy)
+        let capLabels = Set(Self.garmentCaps.flatMap { $0.labels })
+        outfit.garments = (whole.results ?? []).filter { capLabels.contains($0.identifier) && $0.confidence > 0.1 }
+            .map { (label: $0.identifier, confidence: $0.confidence) }
+        if Self.fullLengthLabelLog {
+            outfit.labels = (whole.results ?? []).filter { $0.confidence >= Self.fullLengthLabelFloor }
+                .map { (label: $0.identifier, confidence: $0.confidence) }
+        }
+        return (expression, labels, handOnFace, outfit, coverReader, document)
     }
 
     func matchPerson(in image: UIImage, asset: PHAsset) -> PhotoOutcome {
@@ -4926,10 +5635,10 @@ extension ViewController {
                                    name: String(format: "%02d-d%.3f", debugCropsSaved, distance))
                 }
             }
+            guard !distances.isEmpty else { return nil }
             // For the store: only a complete set, so a stored group verdict never
             // rests on a face that was skipped here.
             lastEmbeddings = vectors.count == faces.count ? vectors : []
-            guard !distances.isEmpty else { return nil }
             return (distances, faceWidth)
         }
 
@@ -4963,6 +5672,17 @@ extension ViewController {
                                              face: faces.first?.boundingBox) }
         // Each reflection of the shopper has a body too; those are not other people.
         body.shopperFaces = lastShopperFaces
+        // What the body score reads: the render the kept body was found on.
+        var bodyObservation = lastBodyObservation
+        var bodyImage = cgImage
+        var bodyOrientation = Self.cgOrientation(image.imageOrientation)
+
+        // A selfie has no lower body to find, so the full-body gate would reject
+        // every one and none would reach the picker. Recognised by the same shape
+        // the classifier uses — a face filling enough of the frame — from numbers
+        // already in hand, so this costs nothing.
+        // Only the shopper in the photo. The face gate cannot see someone with their
+        // back to the camera; the person detector can, and anyone it finds counts.
         if body.hasOthers {
             return .otherPeople(body: body)
         }
@@ -4997,6 +5717,9 @@ extension ViewController {
             if again.hasOthers { return .otherPeople(body: again) }
             guard again.isHeadToToe else { return .notFullBody(body: body) }
             body = again
+            bodyObservation = lastBodyObservation
+            bodyImage = larger
+            bodyOrientation = .up
         }
 
         // Free: the ratio, the body check and `yaw` are already in hand from the
@@ -5036,16 +5759,44 @@ extension ViewController {
                                                   originalLongSide: Float(max(asset.pixelWidth, asset.pixelHeight)),
                                                   camera: camera)
                 }
+                // The v2 full-length score — see `fullLengthScoreV2`.
+                var bodyScore: BodyScore?
+                if Self.fullLengthScoreV2, type != .selfie, let bodyObservation {
+                    var objects: [BodyObjects.Object] = []
+                    if Self.objectReadEnabled, let upright = BodyScore.upright(bodyImage, bodyOrientation) {
+                        objects = timed("score.objects") { BodyObjects.read(upright: upright) }
+                    }
+                    bodyScore = timed("score.body") { BodyScore(image: bodyImage, orientation: bodyOrientation, body: bodyObservation,
+                                                               face: faces[0].boundingBox, originalScale: Double(originalScale) * Double(cgImage.width) / Double(bodyImage.width),
+                                                               caps: Self.garmentCaps(for: context.outfit), objects: objects) }
+                }
                 return timed("score.terms") { MuseScore(face: faces[0], in: cgImage, handler: handler, faceWidth: widest,
                                                          expression: context.expression, labels: context.labels, handOnFace: context.handOnFace,
-                                                         outfit: context.outfit, selfie: type == .selfie, gates: gates, coverReader: context.coverReader) }
+                                                         outfit: context.outfit, selfie: type == .selfie, gates: gates, coverReader: context.coverReader,
+                                                         document: context.document, body: bodyScore) }
             }
         }
         return .scored(distances: scored.distances, facePixels: Int(scored.faceWidth), body: body, type: type, profile: profile, museScore: museScore)
     }
 
-    /// How far outside the face box a body's head points may sit and still be that
-    /// face's body. Generous, since a turned head moves the nose.
+    /// The garment caps a photo's labels call for — see `garmentCaps`. Nil with
+    /// the switch off or when no garment reaches its line.
+    static func garmentCaps(for outfit: MuseScore.Outfit) -> BodyScore.Caps? {
+        guard garmentCapsEnabled else { return nil }
+        var caps = BodyScore.Caps()
+        for rule in garmentCaps {
+            guard let hit = outfit.garments.filter({ rule.labels.contains($0.label) && $0.confidence >= rule.line }).max(by: { $0.confidence < $1.confidence })
+            else { continue }
+            caps.torso = min(caps.torso, rule.torso); caps.legs = min(caps.legs, rule.legs); caps.arms = min(caps.arms, rule.arms)
+            let why = String(format: "%@ %.2f", hit.label, hit.confidence)
+            if !caps.why.contains(why) { caps.why.append(why) }
+        }
+        return caps.why.isEmpty ? nil : caps
+    }
+
+    /// How far outside the face box a body's head points may sit and still make it
+    /// that face's body, as a fraction of the box. Generous: the ears sit on the box
+    /// edge, and a turned head moves the nose.
     static let bodyFaceMargin: CGFloat = 0.5
 
     /// What pose detection finds of the body. With `face`, only the body whose head
@@ -5066,6 +5817,7 @@ extension ViewController {
         let people = peopleRequest.results?.filter { $0.boundingBox.height >= tallest * Self.bystanderRatio }.count ?? 0
         let nobody = BodyCheck(lowerJoints: 0, ankles: 0, headSeen: false, span: 0, footRoom: 0, people: people,
                                shoulderSpread: nil, hipSpread: nil)
+        lastBodyObservation = nil
         guard let bodies = request.results, !bodies.isEmpty else { return nobody }
 
         func seen(_ joints: [VNHumanBodyPoseObservation.JointName],
@@ -5087,6 +5839,7 @@ extension ViewController {
             else { return nobody }
             observation = best
         }
+        lastBodyObservation = observation
 
         let knees = seen([.leftKnee, .rightKnee], of: observation)
         let ankles = seen([.leftAnkle, .rightAnkle], of: observation)
