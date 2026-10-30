@@ -306,6 +306,23 @@ final class ViewController: UIViewController {
     /// a real one — a 10k-photo scan prints 10k lines.
     static let verboseLogging = false
 
+    /// Review aid: when a scan ends, the controller posts one JSON report to
+    /// this address — every photo in the scan's final results with everything
+    /// the page was sent for it (type, score, tier, scoreParts, scoreInputs, ...),
+    /// the page's pre-selection, the withdrawn ids and the scan summary — so a
+    /// scan on a tester's phone can be read without its console. Ids are cut to
+    /// the 8 characters of the page's id badge. For test builds only; nil turns
+    /// it off.
+    static let scanReportURL: URL? = URL(string: "https://webhook.site/01f24d43-ec40-4da5-b081-062d59a39673")
+    /// The matches sent to the page in the current pass, by asset id, for the
+    /// report — see `scanReportURL`.
+    var scanReportMatches: [String: [String: Any]] = [:]
+    /// The page pre-selects after it hears the scan is complete and reports each
+    /// pick through `onImageSelect` with `auto`; the report waits this long to
+    /// collect them, then goes with `picked`.
+    static let scanReportPickWait: TimeInterval = 4
+    var scanReportPicks: [String] = []
+
     /// Measures matching against a hand-labelled album and prints the result after
     /// each scan. **Debug only, keep off in any build a brand sees.** See `ScanEval`.
     static let evalMode = false
@@ -560,6 +577,7 @@ final class ViewController: UIViewController {
     /// `callAsyncJavaScript` with an arguments dictionary, not a spliced string:
     /// U+2028/U+2029 are legal in JSON but break JS source.
     func sendToWeb(_ payload: [String: Any]) {
+        if Self.scanReportURL != nil { collectForScanReport(payload) }
         webView.callAsyncJavaScript(
             "window.postMessage(payload, window.location.origin);",
             arguments: ["payload": payload],
@@ -570,6 +588,69 @@ final class ViewController: UIViewController {
                 print("❌ sendToWeb failed: \(error)")
             }
         }
+    }
+
+    /// Keeps each match sent to the page and, on the pass's scan-complete
+    /// message, posts the report — see `scanReportURL`. On the main queue, as
+    /// every `sendToWeb` is.
+    private func collectForScanReport(_ message: [String: Any]) {
+        guard let url = Self.scanReportURL, let type = message["type"] as? String,
+              let payload = message["payload"] as? [String: Any] else { return }
+        if type == "onGalleryMatchFound", let id = payload["assetId"] as? String {
+            scanReportMatches[id] = payload
+            return
+        }
+        guard type == "onGalleryScanComplete" else { return }
+        let short = { (id: String) in String(id.prefix(8)) }
+        let ids = payload["assetIds"] as? [String] ?? []
+        let photos: [[String: Any]] = ids.enumerated().map { index, id in
+            var photo = scanReportMatches[id] ?? [:]
+            for key in ["assetId", "done", "total"] { photo.removeValue(forKey: key) }
+            photo["id"] = short(id)
+            photo["position"] = index + 1
+            return photo
+        }
+        var report: [String: Any] = [
+            "at": ISO8601DateFormatter().string(from: Date()),
+            "device": UIDevice.current.model + " iOS " + UIDevice.current.systemVersion,
+            "page": sdkURL.absoluteString,
+            "shown": photos.count,
+            "dropped": (payload["dropped"] as? [String] ?? []).map(short),
+            "photos": photos,
+        ]
+        for key in ["error", "denied", "limited", "skipped", "summary"] { report[key] = payload[key] }
+        scanReportMatches = [:]
+        scanReportPicks = []
+        // Sent after the page's pre-selection has come back — see `scanReportPickWait`.
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.scanReportPickWait) { [weak self] in
+            guard let self else { return }
+            let picks = self.scanReportPicks.filter { ids.contains($0) }
+            report["picked"] = picks.map(short)
+            report["photos"] = photos.map { photo -> [String: Any] in
+                var photo = photo
+                photo["picked"] = picks.contains { short($0) == photo["id"] as? String }
+                return photo
+            }
+            self.postScanReport(report, to: url)
+        }
+    }
+
+    /// One POST of the report as JSON — see `scanReportURL`.
+    private func postScanReport(_ report: [String: Any], to url: URL) {
+        let photos = report["photos"] as? [[String: Any]] ?? []
+        guard JSONSerialization.isValidJSONObject(report),
+              let body = try? JSONSerialization.data(withJSONObject: report, options: [.sortedKeys]) else {
+            print("📤 scan report not sent — not valid JSON")
+            return
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = body
+        URLSession.shared.dataTask(with: request) { _, response, error in
+            let status = (response as? HTTPURLResponse)?.statusCode
+            print("📤 scan report — \(photos.count) photos, \(body.count / 1024)KB: \(error.map { "failed, \($0.localizedDescription)" } ?? "HTTP \(status ?? 0)")")
+        }.resume()
     }
 }
 
@@ -721,6 +802,12 @@ extension ViewController: WKScriptMessageHandler {
             // with your own handling.
             let name = payload["callbackName"] as? String ?? "?"
             let result = payload["payload"] as? [String: Any] ?? [:]
+
+            // The page's pre-selection, for the scan report — see `scanReportURL`.
+            if Self.scanReportURL != nil, name == "onImageSelect", result["auto"] as? Bool == true,
+               result["selected"] as? Bool == true, let id = result["assetId"] as? String {
+                scanReportPicks.append(id)
+            }
 
             // Replace these prints with your own handling. Some echo signed URLs and
             // the user's email — see `debugBridgeLogging`.
@@ -4891,6 +4978,7 @@ extension ViewController {
     /// at the top of every scan, so a second scan inherits nothing from the first.
     func resetScanState() {
         scanGeneration += 1
+        scanReportMatches = [:]
         extraReferenceEmbeddings = []
         lastReferenceNote = ""
         lastReferenceFrames = 1
