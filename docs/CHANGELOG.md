@@ -20,6 +20,45 @@ onwards; those entries are kept for reference and need nothing on your side.
 
 ---
 
+## [Unreleased]
+
+**Mobile iOS only.** **Controller: update recommended.** The page is
+unchanged; the selfie ranking changes in the controller. The update replaces
+`ViewController.swift`, `FaceExpression.swift` and `ScanStore.swift`. The
+results store's rules version is 12, so the first scan after the update is a
+full one.
+
+### Changed
+
+- **The selfie head tilt comes from MediaPipe.** Behind
+  `mediaPipePitchEnabled` in the controller, on. The 15° head-tilt gate and
+  the pose group of the selfie score read the pitch from the MediaPipe face
+  model already in the app, instead of Vision's. On three libraries Vision
+  read 8° to 14° on selfies that were level by eye (one read 9.0° where
+  MediaPipe read 3.6°), and Vision has no sign, so a camera above and below
+  the face read alike. Measured effect on the test libraries: selfies that
+  Vision over-read moved up, several from Tier B to Tier A, and two that
+  Vision had gated as pitched came back in at Tier B.
+- **A camera below the face costs the selfie.** Behind `cameraBelowFrom` and
+  `cameraBelowCap`, +2° and 0.6. When MediaPipe reads the camera looking up
+  at the face by 2° or more, the pose group is capped at 0.6. Measured on a
+  labelled set: eye level read −1.6°, above −3.8° and −7.3°, below with the
+  head level +1.2°, +2.3° and +14.2°. A head tipped down toward a low phone
+  reads level or above and is not caught.
+- **A frown caps expression at 0.6**, was 0.5 (`frownCap`), the value on the
+  client's test sheets. The other expression caps stay at 0.5 and an open
+  smile at 0.4. It moves only selfies whose sole expression cap is a frown,
+  by about 3 percent of the score.
+
+### Added
+
+- `scoreInputs` on a selfie gains `mpPitch`, `mpYaw` and `mpRoll` (MediaPipe's
+  head angle in degrees, pitch positive when the camera looks up at the
+  face), `faceRatio` (nose to brow over nose to chin) and `gazeUp`,
+  `gazeDown`, `gazeSide`. The last four are logged only.
+
+---
+
 ## [1.3.8] — 2026-10-30
 
 **Mobile iOS only.** **Controller: update required** for the new ranking. The

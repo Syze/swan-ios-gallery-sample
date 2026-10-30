@@ -60,8 +60,10 @@ struct FaceExpression {
     /// level 0.83. Nil without landmarks.
     let faceRatio: Float?
     /// The head's angle to the camera from the landmarker's face transform, in
-    /// degrees, signed — a second reading beside Vision's. Logged only. Nil
-    /// without the transform.
+    /// degrees, signed; pitch is positive when the camera looks up at the face.
+    /// The pitch is what the v2 selfie gate and pose group read — see
+    /// `ViewController.mediaPipePitchEnabled`; yaw and roll are logged only.
+    /// Nil without the transform.
     let headPitch: Float?
     let headYaw: Float?
     let headRoll: Float?

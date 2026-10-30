@@ -77,10 +77,11 @@ Every step of finding and filtering photos is on the device:
    of the scan.
 4. Matches are scored for the Muse with Apple Vision (face quality, pose,
    head angle, light, sharpness, hats, sunglasses, hands, clothing) and the
-   MediaPipe expression model (smile, blink, brows, eyes, iris size; eye
-   direction is logged but not used). Some are dropped, the rest ranked. A
-   selfie also meets the v2 gates and is dropped when the head is pitched
-   over 15° or turned over 20°, the mouth is open, teeth show without a
+   MediaPipe expression model (smile, blink, brows, eyes, iris size, the
+   head's angle to the camera; eye direction is logged but not used). Some
+   are dropped, the rest ranked. A selfie also meets the v2 gates and is
+   dropped when the head is pitched over 15° (MediaPipe's reading) or turned
+   over 20°, the mouth is open, teeth show without a
    smile, the face is very dark or blown out or touches the frame's edge,
    the camera was under 25 cm away, or the original carries no camera data.
    The distance comes from the iris size and the focal length in the
@@ -96,7 +97,8 @@ Every step of finding and filtering photos is on the device:
    detector finds a page with the face inside it and the classifier half
    agrees. Repeated shots are grouped with Apple's image fingerprint.
    A selfie that passed every gate is then scored the v2 way: six groups
-   (head pose and camera distance from the iris size, light, gaze, expression,
+   (head pose, a camera held below the face and camera distance from the
+   iris size, light, gaze, expression,
    how much of the face is visible, detail), each the lowest of its
    readings, combined by a weighted geometric mean into T from 0 to 1; T at
    0.70 or more is Tier A, and a selfie whose eyes are under 90 px apart in
