@@ -1323,8 +1323,11 @@ extension ViewController {
     /// capped at `cameraBelowCap`. Measured 31 Oct 2026 on a labelled set:
     /// eye level -1.6, above -3.8 and -7.3, below with the head level +1.2,
     /// +2.3 and +14.2; a head tipped down toward a low phone reads level or
-    /// above (-6.9) and is not caught. Nil turns it off.
-    static let cameraBelowFrom: Float? = 2
+    /// above (-6.9) and is not caught. Nil turns it off. Lowered from 2 to 1.5
+    /// on 31 Oct 2026: the client's sweater selfie read 2.0 rounded and just
+    /// under it unrounded, and was not capped; nothing on three libraries reads
+    /// between 1.4 and 1.6, and a level eye-level selfie read -1.6.
+    static let cameraBelowFrom: Float? = 1.5
     static let cameraBelowCap: Float = 0.6
     /// Light: the brighter half of the face over the darker half; the face
     /// over the whole frame (backlight); the share of blown-out face pixels.
@@ -3585,9 +3588,11 @@ struct MuseScore {
             readings["gazeDown"] = fixed(e.gazeDown, 2)
             readings["gazeSide"] = fixed(e.gazeSide, 2)
             if let ratio = e.faceRatio { readings["faceRatio"] = fixed(ratio, 3) }
-            if let p = e.headPitch { readings["mpPitch"] = fixed(p, 1) }
-            if let y = e.headYaw { readings["mpYaw"] = fixed(y, 1) }
-            if let r = e.headRoll { readings["mpRoll"] = fixed(r, 1) }
+            // Two decimals: the camera-below line sits at a whole or half
+            // degree, and one decimal hid which side a reading fell on.
+            if let p = e.headPitch { readings["mpPitch"] = fixed(p, 2) }
+            if let y = e.headYaw { readings["mpYaw"] = fixed(y, 2) }
+            if let r = e.headRoll { readings["mpRoll"] = fixed(r, 2) }
         }
         if let cm = cameraCm { readings["cameraCm"] = fixed(cm, 1) }
         if let gates {

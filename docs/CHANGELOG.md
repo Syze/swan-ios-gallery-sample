@@ -40,10 +40,13 @@ full one.
   Vision over-read moved up, several from Tier B to Tier A, and two that
   Vision had gated as pitched came back in at Tier B.
 - **A camera below the face costs the selfie.** Behind `cameraBelowFrom` and
-  `cameraBelowCap`, +2° and 0.6. When MediaPipe reads the camera looking up
-  at the face by 2° or more, the pose group is capped at 0.6. Measured on a
+  `cameraBelowCap`, +1.5° and 0.6. When MediaPipe reads the camera looking up
+  at the face by 1.5° or more, the pose group is capped at 0.6. Measured on a
   labelled set: eye level read −1.6°, above −3.8° and −7.3°, below with the
-  head level +1.2°, +2.3° and +14.2°. A head tipped down toward a low phone
+  head fairly level +2.3° and +14.2°, below with the eyes looking down at
+  the phone +1.2°. On three libraries no selfie read between +1.4° and
+  +1.6°. `scoreInputs` reports the angles to two decimals, so the side of
+  the line a selfie falls on can be read. A head tipped down toward a low phone
   reads level or above and is not caught.
 - **A frown caps expression at 0.6**, was 0.5 (`frownCap`), the value on the
   client's test sheets. The other expression caps stay at 0.5 and an open
