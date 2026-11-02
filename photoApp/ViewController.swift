@@ -1483,6 +1483,18 @@ extension ViewController {
     /// light set the reading too.
     static let fogGateEnabled = true
     static let fogLimit: Float = 1.9
+    /// Looking down at a phone held low, as a gate (2 Nov 2026): the camera
+    /// below the face — MediaPipe's pitch at `lookingDownPitch` or more, or the
+    /// face ratio (`FaceExpression.faceRatio`) at `lookingDownFaceRatio` of the
+    /// person's usual or less — with the lids lowered, the lid gap at
+    /// `lookingDownLids` of the usual or less, as they are when the eyes look
+    /// down at the screen. Out as "looking down", decided when the score is
+    /// finished (see `selfieUsualEnabled`). Either reading alone is a head
+    /// raised or a squint and stays a score, not a gate.
+    static let lookingDownGateEnabled = true
+    static let lookingDownPitch: Float = 3
+    static let lookingDownFaceRatio: Float = 0.88
+    static let lookingDownLids: Float = 0.9
     static let glassesConfidence: Float = 0.5
     /// Detail: eye spacing in the original's pixels; sharpness keeps its 1.3.x
     /// reading.
@@ -3740,7 +3752,8 @@ struct MuseScore {
         if gates != nil, ViewController.browFurrowEnabled, let creases = expression?.furrow {
             selfieReadings["furrow"] = creases
         }
-        if gates != nil, ViewController.lidGapEnabled || ViewController.lidGapEyeGateEnabled, let gap = expression?.lidGap {
+        if gates != nil, ViewController.lidGapEnabled || ViewController.lidGapEyeGateEnabled || ViewController.lookingDownGateEnabled,
+           let gap = expression?.lidGap {
             selfieReadings["lidGap"] = gap
         }
         if gates != nil, ViewController.irisGazeEnabled, let along = expression?.irisAlong, let across = expression?.irisAcross {
@@ -3753,7 +3766,7 @@ struct MuseScore {
         if gates != nil, ViewController.skinExposureEnabled, let lightness = cover?.skinL {
             selfieReadings["skinL"] = lightness
         }
-        if gates != nil, ViewController.cameraHeightFromFaceRatio, let ratio = expression?.faceRatio,
+        if gates != nil, ViewController.cameraHeightFromFaceRatio || ViewController.lookingDownGateEnabled, let ratio = expression?.faceRatio,
            (cover?.jaw ?? 0) < ViewController.coverJawLimit {
             selfieReadings["faceRatio"] = ratio
         }
@@ -4091,8 +4104,13 @@ struct MuseScore {
         if V.lidGapEnabled, let open {
             finished.addRamped("expression", String(format: "eyes %.2f× as open as usual", open), open, V.lidGapOpenness)
         }
-        if V.cameraHeightFromFaceRatio, let ratio = relative("faceRatio") {
+        let faceRatio = relative("faceRatio")
+        if V.cameraHeightFromFaceRatio, let ratio = faceRatio {
             finished.addRamped("pose", String(format: "camera height %.2f× usual", ratio), ratio, V.cameraHeightRatio)
+        }
+        if V.lookingDownGateEnabled, let open, open <= V.lookingDownLids,
+           (expression?.headPitch ?? -.infinity) >= V.lookingDownPitch || (faceRatio ?? .infinity) <= V.lookingDownFaceRatio {
+            finished.gate("looking down")
         }
         return finished.settled()
     }
