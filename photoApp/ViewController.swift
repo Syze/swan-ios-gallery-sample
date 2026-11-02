@@ -1394,6 +1394,15 @@ extension ViewController {
     /// 14 under it (`skinExposure`). Off: the blown share alone.
     static let skinExposureEnabled = true
     static let skinExposure: (good: Float, bad: Float) = (2, -14)
+    /// Colour cast from the skin's redness against the person's usual (2 Nov
+    /// 2026): the face-skin pixels' mean a* (`FaceCover.skinA`) less the median
+    /// over the person's selfies — see `selfieUsualEnabled`. A magenta or warm
+    /// light on the face raises it; against the usual, so skin tone itself is
+    /// never scored. Full marks to 1 under the usual, zero at 12 over it
+    /// (`skinCast`), in place of the red-green-blue order rule. Off, or without
+    /// a segmenter reading: the order rule.
+    static let skinCastEnabled = true
+    static let skinCast: (good: Float, bad: Float) = (-1, 12)
     static let lightBacklight: (good: Float, bad: Float) = (0.8, 0.4)
     static let lightClipped: (good: Float, bad: Float) = (0.01, 0.05)
     /// Expression: each of these caps the group. A closed smile, eyes held
@@ -3671,6 +3680,9 @@ struct MuseScore {
         }
         // A covered jaw moves the chin the face ratio reads; the jaw gate rules
         // such a selfie out anyway, and the reference selfie is not gated.
+        if gates != nil, ViewController.skinCastEnabled, let redness = cover?.skinA {
+            selfieReadings["skinA"] = redness
+        }
         if gates != nil, ViewController.skinExposureEnabled, let lightness = cover?.skinL {
             selfieReadings["skinL"] = lightness
         }
@@ -3747,6 +3759,7 @@ struct MuseScore {
         if let cover {
             if let ratio = cover.skinSideRatio { readings["skinSideRatio"] = fixed(ratio, 3) }
             if let lightness = cover.skinL { readings["skinL"] = fixed(lightness, 2) }
+            if let redness = cover.skinA { readings["skinA"] = fixed(redness, 2) }
             readings["coverHairline"] = fixed(cover.hairline, 2)
             readings["coverJaw"] = fixed(cover.jaw, 2)
             readings["coverFace"] = fixed(cover.face, 2)
@@ -3853,7 +3866,7 @@ struct MuseScore {
                 // In percent, so the working reads in the label's units.
                 lightSignals.append(ramped(String(format: "blown %.0f%%", f.blown * 100), f.blown * 100, (V.lightClipped.good * 100, V.lightClipped.bad * 100)))
                 let cast: Float = (f.r >= f.g && f.g >= f.b) ? (f.r - f.b > 0.5 ? 0.7 : 1) : 0.6
-                lightSignals.append(noted("colour cast", cast, "red \(n(f.r)), green \(n(f.g)), blue \(n(f.b)): red ≥ green ≥ blue is skin-like, 1 (0.7 when red − blue is over 0.5); any other order 0.6"))
+                if !(V.skinCastEnabled && cover?.skinA != nil) { lightSignals.append(noted("colour cast", cast, "red \(n(f.r)), green \(n(f.g)), blue \(n(f.b)): red ≥ green ≥ blue is skin-like, 1 (0.7 when red − blue is over 0.5); any other order 0.6")) }
             }
             let lightGroup = lowest("light", lightSignals)
 
@@ -3976,6 +3989,9 @@ struct MuseScore {
         }
         if V.skinExposureEnabled, let lighter = difference("skinL") {
             finished.addRamped("light", String(format: "exposure: skin %+.1f L* against the usual", lighter), lighter, V.skinExposure)
+        }
+        if V.skinCastEnabled, let redder = difference("skinA") {
+            finished.addRamped("light", String(format: "colour cast: skin %+.1f a* against the usual", redder), redder, V.skinCast)
         }
         if V.cameraHeightFromFaceRatio, let ratio = relative("faceRatio") {
             finished.addRamped("pose", String(format: "camera height %.2f× usual", ratio), ratio, V.cameraHeightRatio)

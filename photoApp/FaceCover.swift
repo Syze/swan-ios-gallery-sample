@@ -38,6 +38,9 @@ struct FaceCover {
     var skinSideRatio: Float? = nil
     /// The skin's mean lightness, CIELAB L* (0–100), over its face-skin pixels.
     var skinL: Float? = nil
+    /// The skin's mean redness, CIELAB a*, over its face-skin pixels: a magenta
+    /// or warm cast on the face raises it.
+    var skinA: Float? = nil
 
     static let modelName = "selfie_multiclass_256x256"
     /// The crop's longer side is brought down to this before the model, which
@@ -78,6 +81,7 @@ struct FaceCover {
         String(format: "cover hairline %.2f jaw %.2f face %.2f bare %.2f (%dms)", hairline, jaw, face, bare, ms)
             + (skinSideRatio.map { String(format: "; skin sides %.2f×", $0) } ?? "")
             + (skinL.map { String(format: " L %.1f", $0) } ?? "")
+            + (skinA.map { String(format: " a %.1f", $0) } ?? "")
     }
 
     /// Reads the head crop. `face` is Vision's face box inside the crop, in the
@@ -154,7 +158,7 @@ struct FaceCover {
         let chin = (x: Float(landmarks[152].x) * Float(mw), y: Float(landmarks[152].y) * Float(mh))
         let dx = chin.x - top.x, dy = chin.y - top.y
         var sideA: [Float] = [], sideB: [Float] = []
-        var sumL: Float = 0
+        var sumL: Float = 0, sumA: Float = 0
         for y in 0..<mh {
             for x in 0..<mw where mask[y * mw + x] == Class.faceSkin.rawValue {
                 let px = min(imageWidth - 1, Int(Float(x) / sx)), py = min(imageHeight - 1, Int(Float(y) / sy))
@@ -163,11 +167,15 @@ struct FaceCover {
                 let luma = 0.299 * r + 0.587 * g + 0.114 * b
                 let lab = Self.lab(r, g, b)
                 sumL += lab.l
+                sumA += lab.a
                 if (Float(x) - top.x) * dy - (Float(y) - top.y) * dx > 0 { sideA.append(luma) } else { sideB.append(luma) }
             }
         }
         let count = sideA.count + sideB.count
-        if count > 100 { skinL = sumL / Float(count) }
+        if count > 100 {
+            skinL = sumL / Float(count)
+            skinA = sumA / Float(count)
+        }
         if sideA.count > 50, sideB.count > 50 {
             let a = Self.median(sideA), b = Self.median(sideB)
             skinSideRatio = max(a, b) / max(min(a, b), 0.01)
