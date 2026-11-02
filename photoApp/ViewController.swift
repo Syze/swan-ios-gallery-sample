@@ -1428,6 +1428,15 @@ extension ViewController {
     /// The fixed closed-eye and wink gates still apply as the photo streams.
     static let lidGapEyeGateEnabled = true
     static let lidGapClosed: Float = 0.68
+    /// Brow furrow from the creases between the brows, against the person's
+    /// usual (2 Nov 2026): `FaceExpression.furrow` as a share of the median —
+    /// see `selfieUsualEnabled`. An expression signal beside the frown cap
+    /// (`frownLimit`), which reads the brows' movement and misses a furrow
+    /// held with the brows still. Full marks to 1.2 of the usual, zero at 3.2
+    /// (`browFurrow`); someone who always furrows is not marked down for it.
+    /// Off: the frown cap alone.
+    static let browFurrowEnabled = true
+    static let browFurrow: (good: Float, bad: Float) = (1.2, 3.2)
     static let lightBacklight: (good: Float, bad: Float) = (0.8, 0.4)
     static let lightClipped: (good: Float, bad: Float) = (0.01, 0.05)
     /// Expression: each of these caps the group. A closed smile, eyes held
@@ -3705,6 +3714,9 @@ struct MuseScore {
         }
         // A covered jaw moves the chin the face ratio reads; the jaw gate rules
         // such a selfie out anyway, and the reference selfie is not gated.
+        if gates != nil, ViewController.browFurrowEnabled, let creases = expression?.furrow {
+            selfieReadings["furrow"] = creases
+        }
         if gates != nil, ViewController.lidGapEnabled || ViewController.lidGapEyeGateEnabled, let gap = expression?.lidGap {
             selfieReadings["lidGap"] = gap
         }
@@ -3776,6 +3788,7 @@ struct MuseScore {
             if let a = e.irisAlong { readings["irisAlong"] = fixed(a, 3) }
             if let a = e.irisAcross { readings["irisAcross"] = fixed(a, 3) }
             if let gap = e.lidGap { readings["lidGap"] = fixed(gap, 3) }
+            if let creases = e.furrow { readings["furrow"] = fixed(creases, 4) }
             if let ratio = e.faceRatio { readings["faceRatio"] = fixed(ratio, 3) }
             // Two decimals: the camera-below line sits at a whole or half
             // degree, and one decimal hid which side a reading fell on.
@@ -4031,6 +4044,9 @@ struct MuseScore {
         if V.irisGazeEnabled, let along = difference("irisAlong"), let across = difference("irisAcross") {
             let off = hypot(along, across)
             finished.addRamped("gaze", String(format: "gaze %.2f off the usual", off), off, V.irisGaze)
+        }
+        if V.browFurrowEnabled, let creases = relative("furrow") {
+            finished.addRamped("expression", String(format: "brow furrow %.2f× usual", creases), creases, V.browFurrow)
         }
         let open = relative("lidGap")
         if V.lidGapEyeGateEnabled, let open, open < V.lidGapClosed { finished.gate("eyes closed") }

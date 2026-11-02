@@ -88,6 +88,13 @@ struct FaceExpression {
     /// the iris's width, the narrower eye of the two. A squint or a look down
     /// narrows the gap while the iris keeps its size. Nil without iris points.
     let lidGap: Float?
+    /// Vertical creases between the brows, which the frown blendshape misses
+    /// when the brows themselves stay put: the patch above the nose bridge
+    /// (around point 9, above where a glasses bridge sits), brought to a scale
+    /// where the pupils are 120 px apart, its mean left-right brightness change
+    /// over its mean brightness. Higher is more furrowed; read against the
+    /// person's usual. Nil without iris points.
+    let furrow: Float?
     /// The landmarker's points in the head crop, 0–1 with the origin at the top
     /// left, for readers of the same crop that need the face's geometry — see
     /// `FaceCover.read`. Empty without landmarks.
@@ -140,6 +147,28 @@ struct FaceExpression {
         print("🙂 Expression reader ready in \(Int(Date().timeIntervalSince(started) * 1000))ms")
     }
 
+    /// Mean left-right brightness change over mean brightness in `patch` of
+    /// `image`, resampled by `scale` — see `furrow`.
+    private static func creases(in image: CGImage, patch: CGRect, scale: CGFloat) -> Float? {
+        guard patch.width >= 6, patch.height >= 6, let cropped = image.cropping(to: patch) else { return nil }
+        let w = max(6, Int(patch.width * scale)), h = max(6, Int(patch.height * scale))
+        guard let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w,
+                                  space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGImageAlphaInfo.none.rawValue) else { return nil }
+        ctx.interpolationQuality = .high
+        ctx.draw(cropped, in: CGRect(x: 0, y: 0, width: w, height: h))
+        guard let data = ctx.data?.bindMemory(to: UInt8.self, capacity: w * h) else { return nil }
+        var change: Float = 0, sum: Float = 0
+        for y in 0..<h {
+            for x in 0..<w {
+                let v = Float(data[y * w + x]) / 255
+                sum += v
+                if x > 0 { change += abs(v - Float(data[y * w + x - 1]) / 255) }
+            }
+        }
+        let meanChange = change / Float((w - 1) * h)
+        return meanChange / max(sum / Float(w * h), 0.05)
+    }
+
     /// The expression in a head crop — the face box with generous margin, so
     /// the landmarker, built for faces that fill the frame, gets what it expects.
     /// Nil when the reader is unavailable or finds no face in the crop.
@@ -161,6 +190,7 @@ struct FaceExpression {
         var eyeYaw: Float?, eyePitch: Float?
         var irisAlong: Float?, irisAcross: Float?
         var lidGap: Float?
+        var furrow: Float?
         if let points = result.faceLandmarks.first, points.count >= 478 {
             let w = Float(headCrop.width), h = Float(headCrop.height)
             func across(_ a: Int, _ b: Int) -> Float {
@@ -206,6 +236,13 @@ struct FaceExpression {
             let gaps = [(across(159, 145), across(469, 471)), (across(386, 374), across(474, 476))]
                 .compactMap { $0.1 > 0 ? $0.0 / $0.1 : nil }
             lidGap = gaps.min()
+            let pupils = across(468, 473)
+            if pupils > 0 {
+                let centre = (x: CGFloat(points[9].x * w), y: CGFloat(points[9].y * h)), ipd = CGFloat(pupils)
+                let patch = CGRect(x: centre.x - 0.22 * ipd, y: centre.y - 0.30 * ipd, width: 0.44 * ipd, height: 0.40 * ipd)
+                    .intersection(CGRect(x: 0, y: 0, width: headCrop.width, height: headCrop.height)).integral
+                furrow = creases(in: headCrop, patch: patch, scale: 120 / ipd)
+            }
             let irises = [irisIn(iris: 468, corners: (33, 133), lids: (159, 145)),
                           irisIn(iris: 473, corners: (263, 362), lids: (386, 374))].compactMap { $0 }
             if !irises.isEmpty {
@@ -251,6 +288,7 @@ struct FaceExpression {
             irisAlong: irisAlong,
             irisAcross: irisAcross,
             lidGap: lidGap,
+            furrow: furrow,
             landmarks: (result.faceLandmarks.first ?? []).map { CGPoint(x: CGFloat($0.x), y: CGFloat($0.y)) },
             ms: Int(Date().timeIntervalSince(started) * 1000))
     }
