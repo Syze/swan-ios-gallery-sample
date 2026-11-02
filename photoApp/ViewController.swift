@@ -1386,6 +1386,14 @@ extension ViewController {
     /// segmenter gave no reading: the face box on `lightEvenness`.
     static let skinEvennessEnabled = true
     static let skinEvenness: (good: Float, bad: Float) = (1.05, 2.0)
+    /// Exposure from the skin's lightness against the person's usual (2 Nov
+    /// 2026): the face-skin pixels' mean L* (`FaceCover.skinL`) less the median
+    /// over the person's selfies — see `selfieUsualEnabled`. Against the usual,
+    /// not a fixed value, so a person's own skin tone is never scored. A light
+    /// signal beside the blown share: full marks from 2 over the usual, zero at
+    /// 14 under it (`skinExposure`). Off: the blown share alone.
+    static let skinExposureEnabled = true
+    static let skinExposure: (good: Float, bad: Float) = (2, -14)
     static let lightBacklight: (good: Float, bad: Float) = (0.8, 0.4)
     static let lightClipped: (good: Float, bad: Float) = (0.01, 0.05)
     /// Expression: each of these caps the group. A closed smile, eyes held
@@ -3663,6 +3671,9 @@ struct MuseScore {
         }
         // A covered jaw moves the chin the face ratio reads; the jaw gate rules
         // such a selfie out anyway, and the reference selfie is not gated.
+        if gates != nil, ViewController.skinExposureEnabled, let lightness = cover?.skinL {
+            selfieReadings["skinL"] = lightness
+        }
         if gates != nil, ViewController.cameraHeightFromFaceRatio, let ratio = expression?.faceRatio,
            (cover?.jaw ?? 0) < ViewController.coverJawLimit {
             selfieReadings["faceRatio"] = ratio
@@ -3735,6 +3746,7 @@ struct MuseScore {
         }
         if let cover {
             if let ratio = cover.skinSideRatio { readings["skinSideRatio"] = fixed(ratio, 3) }
+            if let lightness = cover.skinL { readings["skinL"] = fixed(lightness, 2) }
             readings["coverHairline"] = fixed(cover.hairline, 2)
             readings["coverJaw"] = fixed(cover.jaw, 2)
             readings["coverFace"] = fixed(cover.face, 2)
@@ -3955,6 +3967,15 @@ struct MuseScore {
             guard let reading = selfieReadings[name], let typical = usual[name], typical != 0 else { return nil }
             finished.readings["\(name)Usual"] = (Double(typical) * 1000).rounded() / 1000
             return reading / typical
+        }
+        // Read against the usual, as the reading less it.
+        func difference(_ name: String) -> Float? {
+            guard let reading = selfieReadings[name], let typical = usual[name] else { return nil }
+            finished.readings["\(name)Usual"] = (Double(typical) * 1000).rounded() / 1000
+            return reading - typical
+        }
+        if V.skinExposureEnabled, let lighter = difference("skinL") {
+            finished.addRamped("light", String(format: "exposure: skin %+.1f L* against the usual", lighter), lighter, V.skinExposure)
         }
         if V.cameraHeightFromFaceRatio, let ratio = relative("faceRatio") {
             finished.addRamped("pose", String(format: "camera height %.2f× usual", ratio), ratio, V.cameraHeightRatio)

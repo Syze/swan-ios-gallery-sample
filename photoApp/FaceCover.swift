@@ -36,6 +36,8 @@ struct FaceCover {
     /// the darker side, split on the face's own midline (brow centre to chin).
     /// Nil without landmarks or with too little skin on either side.
     var skinSideRatio: Float? = nil
+    /// The skin's mean lightness, CIELAB L* (0–100), over its face-skin pixels.
+    var skinL: Float? = nil
 
     static let modelName = "selfie_multiclass_256x256"
     /// The crop's longer side is brought down to this before the model, which
@@ -75,6 +77,7 @@ struct FaceCover {
     var note: String {
         String(format: "cover hairline %.2f jaw %.2f face %.2f bare %.2f (%dms)", hairline, jaw, face, bare, ms)
             + (skinSideRatio.map { String(format: "; skin sides %.2f×", $0) } ?? "")
+            + (skinL.map { String(format: " L %.1f", $0) } ?? "")
     }
 
     /// Reads the head crop. `face` is Vision's face box inside the crop, in the
@@ -151,19 +154,35 @@ struct FaceCover {
         let chin = (x: Float(landmarks[152].x) * Float(mw), y: Float(landmarks[152].y) * Float(mh))
         let dx = chin.x - top.x, dy = chin.y - top.y
         var sideA: [Float] = [], sideB: [Float] = []
+        var sumL: Float = 0
         for y in 0..<mh {
             for x in 0..<mw where mask[y * mw + x] == Class.faceSkin.rawValue {
                 let px = min(imageWidth - 1, Int(Float(x) / sx)), py = min(imageHeight - 1, Int(Float(y) / sy))
                 let i = (py * imageWidth + px) * 4
                 let r = Float(pixels[i]) / 255, g = Float(pixels[i + 1]) / 255, b = Float(pixels[i + 2]) / 255
                 let luma = 0.299 * r + 0.587 * g + 0.114 * b
+                let lab = Self.lab(r, g, b)
+                sumL += lab.l
                 if (Float(x) - top.x) * dy - (Float(y) - top.y) * dx > 0 { sideA.append(luma) } else { sideB.append(luma) }
             }
         }
+        let count = sideA.count + sideB.count
+        if count > 100 { skinL = sumL / Float(count) }
         if sideA.count > 50, sideB.count > 50 {
             let a = Self.median(sideA), b = Self.median(sideB)
             skinSideRatio = max(a, b) / max(min(a, b), 0.01)
         }
+    }
+
+    /// sRGB, 0–1, to CIELAB under D65.
+    static func lab(_ r: Float, _ g: Float, _ b: Float) -> (l: Float, a: Float, b: Float) {
+        func linear(_ c: Float) -> Float { c <= 0.04045 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4) }
+        let (lr, lg, lb) = (linear(r), linear(g), linear(b))
+        let x = (0.4124 * lr + 0.3576 * lg + 0.1805 * lb) / 0.95047
+        let y = 0.2126 * lr + 0.7152 * lg + 0.0722 * lb
+        let z = (0.0193 * lr + 0.1192 * lg + 0.9505 * lb) / 1.08883
+        func f(_ t: Float) -> Float { t > 0.008856 ? cbrt(t) : 7.787 * t + 16 / 116 }
+        return (116 * f(y) - 16, 500 * (f(x) - f(y)), 200 * (f(y) - f(z)))
     }
 
     private static func median(_ values: [Float]) -> Float {
