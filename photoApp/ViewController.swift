@@ -1463,6 +1463,12 @@ extension ViewController {
     /// `FaceCover`. Clear glasses cap it at `glassesCap`.
     static let visibilityShare: (good: Float, bad: Float) = (0.95, 0.85)
     static let glassesCap: Float = 0.85
+    /// The share of the face oval glasses frames are allowed to cover before
+    /// the face counts as less visible (2 Nov 2026). The segmenter reads frames
+    /// as neither skin nor hair, so clear glasses cost twice: the oval share
+    /// and `glassesCap`. With glasses on, this much is taken off the covered
+    /// share first, and the cap is what they cost. 0: no allowance, as before.
+    static let glassesOvalAllowance: Float = 0.08
     static let glassesConfidence: Float = 0.5
     /// Detail: eye spacing in the original's pixels; sharpness keeps its 1.3.x
     /// reading.
@@ -3935,7 +3941,13 @@ struct MuseScore {
             let expressionGroup = lowest("expression", expressionSignals)
 
             var visibilitySignals: [(String, Float)] = []
-            if let cover { visibilitySignals.append(ramped(String(format: "face %.0f%% visible", (1 - cover.face) * 100), (1 - cover.face) * 100, (V.visibilityShare.good * 100, V.visibilityShare.bad * 100))) }
+            // Glasses frames read as covering part of the oval; with glasses on
+            // that much is allowed for — see `glassesOvalAllowance`.
+            let glassesOn = (labels["eyeglasses"] ?? 0) >= V.glassesConfidence
+            if let cover {
+                let visible = 1 - max(0, cover.face - (glassesOn ? V.glassesOvalAllowance : 0))
+                visibilitySignals.append(ramped(String(format: "face %.0f%% visible", visible * 100), visible * 100, (V.visibilityShare.good * 100, V.visibilityShare.bad * 100)))
+            }
             if (labels["eyeglasses"] ?? 0) >= V.glassesConfidence { visibilitySignals.append(noted("glasses", V.glassesCap, "glasses label \(n(labels["eyeglasses"] ?? 0)), at or over \(n(V.glassesConfidence)): capped at \(n(V.glassesCap))")) }
             let visibilityGroup = lowest("visibility", visibilitySignals)
 
