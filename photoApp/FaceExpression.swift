@@ -40,6 +40,16 @@ struct FaceExpression {
     let gazeUp: Float
     let gazeDown: Float
     let gazeSide: Float
+    /// Where the eyes point in the head, in degrees, the mean of the two eyes:
+    /// the iris centre's offset from the midpoint of the eye's corners, along
+    /// and across the line between them, turned into millimetres by the iris
+    /// size and into an angle over a 12 mm eyeball radius. Yaw is positive
+    /// toward the image's right, pitch positive downward in the image. Logged
+    /// only (plan, gaze units): the resting offset and the signs are set from
+    /// labelled photos before gaze is scored, and gaze to the lens is this
+    /// plus the head's angle. Nil without iris points.
+    let eyeYaw: Float?
+    let eyePitch: Float?
     /// Iris diameter in the crop's pixels, the mean of the two irises from the
     /// landmarker's iris points (468–477). Every iris is about 11.7 mm across,
     /// so with the camera's focal length this gives the distance to the face —
@@ -133,6 +143,7 @@ struct FaceExpression {
         // Iris width: the outer two of each iris's four rim points, in pixels.
         var irisPixels: Float?
         var faceRatio: Float?
+        var eyeYaw: Float?, eyePitch: Float?
         if let points = result.faceLandmarks.first, points.count >= 478 {
             let w = Float(headCrop.width), h = Float(headCrop.height)
             func across(_ a: Int, _ b: Int) -> Float {
@@ -141,6 +152,27 @@ struct FaceExpression {
             irisPixels = (across(469, 471) + across(474, 476)) / 2
             let lower = across(1, 152)
             if lower > 0 { faceRatio = across(9, 1) / lower }
+            // One eye's rotation: its iris centre against its corners, the
+            // corner line turned to run left to right in the image.
+            func eyeAngles(iris: Int, corners: (Int, Int), irisWidth: Float) -> (yaw: Float, pitch: Float)? {
+                let a = (x: points[corners.0].x * w, y: points[corners.0].y * h)
+                let b = (x: points[corners.1].x * w, y: points[corners.1].y * h)
+                let (left, right) = a.x <= b.x ? (a, b) : (b, a)
+                let length = hypot(right.x - left.x, right.y - left.y)
+                guard length > 0, irisWidth > 0 else { return nil }
+                let ux = (right.x - left.x) / length, uy = (right.y - left.y) / length
+                let dx = points[iris].x * w - (left.x + right.x) / 2
+                let dy = points[iris].y * h - (left.y + right.y) / 2
+                let millimetres = 11.7 / irisWidth
+                let degrees = { (offset: Float) in asin(max(-1, min(1, offset * millimetres / 12))) * 180 / .pi }
+                return (degrees(dx * ux + dy * uy), degrees(dy * ux - dx * uy))
+            }
+            let eyes = [eyeAngles(iris: 468, corners: (33, 133), irisWidth: across(469, 471)),
+                        eyeAngles(iris: 473, corners: (362, 263), irisWidth: across(474, 476))].compactMap { $0 }
+            if !eyes.isEmpty {
+                eyeYaw = eyes.map(\.yaw).reduce(0, +) / Float(eyes.count)
+                eyePitch = eyes.map(\.pitch).reduce(0, +) / Float(eyes.count)
+            }
         }
         // Euler angles from the transform's rotation part, as MediaPipe's own
         // samples read it.
@@ -166,6 +198,8 @@ struct FaceExpression {
             gazeDown: (value("eyeLookDownLeft") + value("eyeLookDownRight")) / 2,
             gazeSide: max((value("eyeLookInLeft") + value("eyeLookOutRight")) / 2,
                           (value("eyeLookOutLeft") + value("eyeLookInRight")) / 2),
+            eyeYaw: eyeYaw,
+            eyePitch: eyePitch,
             irisPixels: irisPixels,
             pucker: value("mouthPucker"),
             funnel: value("mouthFunnel"),

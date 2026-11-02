@@ -15,7 +15,7 @@ final class ViewController: UIViewController {
 
     /// Where the SDK bundle is served from. Must be **https** — getUserMedia needs
     /// a secure context, so an http or file:// URL gives no camera.
-    let sdkURL = URL(string: "https://swan-mobile-web-component.swan.so/v1.3.8/index.html")!
+    let sdkURL = URL(string: "https://swan-mobile-web-component.swan.so/v1.3.9/index.html")!
 
     static let bridgeName = "swanBridge"
 
@@ -1291,8 +1291,10 @@ extension ViewController {
             if asset.burstSelectionTypes.contains(.userPick) { choices += 0.25 }
             let p = 0.7 * 0.5 + 0.3 * min(choices, 1)
             r = 0.45 * t + 0.40 * p + 0.15 * recency
+            fields["orderParts"] = ["choices": choices, "personal": p, "recency": recency]
         } else {
             r = 0.8 * t + 0.2 * recency
+            fields["orderParts"] = ["recency": recency]
         }
         fields["order"] = 1 + r
         return fields
@@ -1329,6 +1331,15 @@ extension ViewController {
     /// between 1.4 and 1.6, and a level eye-level selfie read -1.6.
     static let cameraBelowFrom: Float? = 1.5
     static let cameraBelowCap: Float = 0.6
+    /// The camera below as a slope instead of the step at `cameraBelowFrom`
+    /// (agreed 2 Nov 2026): from `good` degrees the pose signal falls in a
+    /// straight line toward 0 at `bad`, and never under `cameraBelowCap`, so
+    /// it reaches the old cap at 2.4° and no photo scores lower than under the
+    /// step. The step took 14 percent off T at once: the client's sweater
+    /// selfie went from 0.95 to 0.86 between 1.49 and 1.50 degrees, a reading
+    /// that moves by that much between two scans of one photo. Replayed on the
+    /// three latest reports: no pick or tier changed. Nil: the step.
+    static let cameraBelowSlope: (good: Float, bad: Float)? = (0, 6)
     /// Light: the brighter half of the face over the darker half; the face
     /// over the whole frame (backlight); the share of blown-out face pixels.
     /// Bright only (30 Oct 2026): the face box takes in hair, beard and a
@@ -3127,6 +3138,13 @@ struct MuseScore {
     /// for every other photo, and for a selfie a gate ruled out.
     let tier: String?
     let reasons: [String]
+    /// Under `ViewController.selfieScoreV2`, every signal of each group with its
+    /// 0–1 value, the lowest of which set the group. Sent as `scoreSignals`, for
+    /// the page's score sheet. Empty for every other photo.
+    let signals: [String: [(why: String, value: Float)]]
+    /// The working behind each of `signals`, by its `why`: the reading against
+    /// its curve, or the line that capped it. Sent as each signal's `how`.
+    let signalHows: [String: String]
     /// Under `ViewController.selfieScoreV2`, eyes held wide or raised brows —
     /// see `ViewController.wideEyesLine`. Sent as `wideEyes`.
     let wideEyesV2: Bool
@@ -3587,6 +3605,9 @@ struct MuseScore {
             readings["gazeUp"] = fixed(e.gazeUp, 2)
             readings["gazeDown"] = fixed(e.gazeDown, 2)
             readings["gazeSide"] = fixed(e.gazeSide, 2)
+            // Logged only, for setting the gaze curve — see `FaceExpression.eyeYaw`.
+            if let y = e.eyeYaw { readings["eyeYaw"] = fixed(y, 2) }
+            if let p = e.eyePitch { readings["eyePitch"] = fixed(p, 2) }
             if let ratio = e.faceRatio { readings["faceRatio"] = fixed(ratio, 3) }
             // Two decimals: the camera-below line sits at a whole or half
             // degree, and one decimal hid which side a reading fell on.
@@ -3645,6 +3666,8 @@ struct MuseScore {
         // passed for selfies only. Replaces the parts, bands and multipliers.
         var tier: String?
         var reasons: [String] = []
+        var groupSignals: [String: [(why: String, value: Float)]] = [:]
+        var hows: [String: String] = [:]
         var wideEyesV2 = false
         if ViewController.selfieScoreV2, let gates {
             typealias V = ViewController
@@ -3652,59 +3675,85 @@ struct MuseScore {
             func ramp(_ value: Float, _ curve: (good: Float, bad: Float)) -> Float {
                 clamp((value - curve.bad) / (curve.good - curve.bad))
             }
-            // The lowest of a group's signals, and what it was.
-            func lowest(_ signals: [(why: String, value: Float)]) -> Float {
+            // The working behind each signal, for the page's score sheet — see
+            // `signalHows`.
+            func n(_ x: Float) -> String { String(format: "%g", (Double(x) * 100).rounded() / 100) }
+            func ramped(_ why: String, _ reading: Float, _ curve: (good: Float, bad: Float)) -> (String, Float) {
+                let value = ramp(reading, curve)
+                let (good, bad) = (curve.good, curve.bad)
+                // Higher is better when `good` is above `bad` (distance, eye spacing).
+                hows[why] = value >= 1 ? "\(n(reading)) is \(good > bad ? "at or above" : "within") \(n(good)): full marks"
+                    : value <= 0 ? "\(n(reading)) is \(good > bad ? "at or below" : "at or past") \(n(bad)): zero"
+                    : good > bad ? "(\(n(reading)) − \(n(bad))) ÷ (\(n(good)) − \(n(bad))) = \(String(format: "%.2f", value))"
+                    : "(\(n(bad)) − \(n(reading))) ÷ (\(n(bad)) − \(n(good))) = \(String(format: "%.2f", value))"
+                return (why, value)
+            }
+            func noted(_ why: String, _ value: Float, _ how: String) -> (String, Float) {
+                hows[why] = how
+                return (why, value)
+            }
+            // The lowest of a group's signals, and what it was. Every signal is
+            // kept for the page's score sheet — see `signals`.
+            func lowest(_ group: String, _ signals: [(why: String, value: Float)]) -> Float {
+                groupSignals[group] = signals
                 guard let low = signals.min(by: { $0.value < $1.value }) else { return 1 }
                 if low.value < 1 { reasons.append(low.why) }
                 return low.value
             }
             var poseSignals: [(String, Float)] = [
-                (String(format: "pitch %.0f°", selfiePitch), ramp(selfiePitch, V.posePitch)),
-                (String(format: "yaw %.0f°", yaw), ramp(yaw, V.poseYaw)),
-                (String(format: "roll %.0f°", roll), ramp(roll, V.poseRoll)),
+                ramped(String(format: "pitch %.0f°", selfiePitch), selfiePitch, V.posePitch),
+                ramped(String(format: "yaw %.0f°", yaw), yaw, V.poseYaw),
+                ramped(String(format: "roll %.0f°", roll), roll, V.poseRoll),
             ]
-            if let cm = cameraCm { poseSignals.append((String(format: "camera %.0f cm", cm), ramp(cm, V.poseDistance))) }
-            if let below = V.cameraBelowFrom, let p = signedPitch, p >= below {
-                poseSignals.append((String(format: "camera below %+.0f°", p), V.cameraBelowCap))
+            if let cm = cameraCm { poseSignals.append(ramped(String(format: "camera %.0f cm", cm), cm, V.poseDistance)) }
+            if let slope = V.cameraBelowSlope, let p = signedPitch, p > slope.good {
+                let sloped = ramp(p, slope)
+                poseSignals.append(noted(String(format: "camera below %+.1f°", p), max(sloped, V.cameraBelowCap),
+                    "(\(n(slope.bad)) − \(n(p))) ÷ (\(n(slope.bad)) − \(n(slope.good))) = \(String(format: "%.2f", sloped))" + (sloped < V.cameraBelowCap ? ", never under \(n(V.cameraBelowCap))" : "")))
+            } else if V.cameraBelowSlope == nil, let below = V.cameraBelowFrom, let p = signedPitch, p >= below {
+                poseSignals.append(noted(String(format: "camera below %+.0f°", p), V.cameraBelowCap, "\(n(p))° is at or over +\(n(below))°: capped at \(n(V.cameraBelowCap))"))
             }
-            let poseGroup = lowest(poseSignals)
+            let poseGroup = lowest("pose", poseSignals)
 
             var lightSignals: [(String, Float)] = []
             if let f = faceStats {
                 let bright = max(f.left, f.right), dark = max(min(f.left, f.right), 0.01)
-                lightSignals.append((String(format: "uneven light %.1f×", bright / dark), ramp(bright / dark, V.lightEvenness)))
+                lightSignals.append(ramped(String(format: "uneven light %.1f×", bright / dark), bright / dark, V.lightEvenness))
                 if let whole = imageStats {
                     let ratio = f.mean / max(whole.mean, 0.01)
-                    lightSignals.append((String(format: "backlit %.2f", ratio), ramp(ratio, V.lightBacklight)))
+                    lightSignals.append(ramped(String(format: "backlit %.2f", ratio), ratio, V.lightBacklight))
                 }
-                lightSignals.append((String(format: "blown %.0f%%", f.blown * 100), ramp(f.blown, V.lightClipped)))
+                // In percent, so the working reads in the label's units.
+                lightSignals.append(ramped(String(format: "blown %.0f%%", f.blown * 100), f.blown * 100, (V.lightClipped.good * 100, V.lightClipped.bad * 100)))
                 let cast: Float = (f.r >= f.g && f.g >= f.b) ? (f.r - f.b > 0.5 ? 0.7 : 1) : 0.6
-                lightSignals.append(("colour cast", cast))
+                lightSignals.append(noted("colour cast", cast, "red \(n(f.r)), green \(n(f.g)), blue \(n(f.b)): red ≥ green ≥ blue is skin-like, 1 (0.7 when red − blue is over 0.5); any other order 0.6"))
             }
-            let lightGroup = lowest(lightSignals)
+            let lightGroup = lowest("light", lightSignals)
 
             // Scores 1 until measured — plan, item 3 decisions.
             let gazeGroup: Float = 1
+            groupSignals["gaze"] = []
 
             var expressionSignals: [(String, Float)] = []
-            if smile == .closed { expressionSignals.append(("closed smile", V.expressionCapped)) }
-            if smile == .open { expressionSignals.append(("open smile", V.expressionOpenSmile)) }
+            let smileReading = expression.map { "smile \(n($0.smile))" } ?? "a smile from the lip shape"
+            if smile == .closed { expressionSignals.append(noted("closed smile", V.expressionCapped, "\(smileReading), lips closed: capped at \(n(V.expressionCapped))")) }
+            if smile == .open { expressionSignals.append(noted("open smile", V.expressionOpenSmile, "\(smileReading), lips parted or teeth showing: capped at \(n(V.expressionOpenSmile))")) }
             let wideEyes = wideEyed || (expression?.eyeWide ?? 0) >= V.wideEyesLine
-            if wideEyes { expressionSignals.append(("wide-eyed", V.expressionCapped)) }
+            if wideEyes { expressionSignals.append(noted("wide-eyed", V.expressionCapped, "eyes wide \(n(expression?.eyeWide ?? 0)) (counts from \(n(V.wideEyesLine))), or brows up with a smile: capped at \(n(V.expressionCapped))")) }
             if let e = expression {
-                if e.pucker >= V.puckerLimit { expressionSignals.append((String(format: "pucker %.2f", e.pucker), V.expressionCapped)) }
-                if e.browDown >= V.frownLimit { expressionSignals.append((String(format: "frown %.2f", e.browDown), V.frownCap)) }
+                if e.pucker >= V.puckerLimit { expressionSignals.append(noted(String(format: "pucker %.2f", e.pucker), V.expressionCapped, "\(n(e.pucker)) is at or over \(n(V.puckerLimit)): capped at \(n(V.expressionCapped))")) }
+                if e.browDown >= V.frownLimit { expressionSignals.append(noted(String(format: "frown %.2f", e.browDown), V.frownCap, "brows pulled down \(n(e.browDown)), at or over \(n(V.frownLimit)): capped at \(n(V.frownCap))")) }
             }
-            let expressionGroup = lowest(expressionSignals)
+            let expressionGroup = lowest("expression", expressionSignals)
 
             var visibilitySignals: [(String, Float)] = []
-            if let cover { visibilitySignals.append((String(format: "face %.0f%% visible", (1 - cover.face) * 100), ramp(1 - cover.face, V.visibilityShare))) }
-            if (labels["eyeglasses"] ?? 0) >= V.glassesConfidence { visibilitySignals.append(("glasses", V.glassesCap)) }
-            let visibilityGroup = lowest(visibilitySignals)
+            if let cover { visibilitySignals.append(ramped(String(format: "face %.0f%% visible", (1 - cover.face) * 100), (1 - cover.face) * 100, (V.visibilityShare.good * 100, V.visibilityShare.bad * 100))) }
+            if (labels["eyeglasses"] ?? 0) >= V.glassesConfidence { visibilitySignals.append(noted("glasses", V.glassesCap, "glasses label \(n(labels["eyeglasses"] ?? 0)), at or over \(n(V.glassesConfidence)): capped at \(n(V.glassesCap))")) }
+            let visibilityGroup = lowest("visibility", visibilitySignals)
 
-            var detailSignals: [(String, Float)] = [(String(format: "sharpness %.2f", sharp), sharp)]
-            if let eyes = gates.eyeSpacingOriginal { detailSignals.append((String(format: "eyes %.0f px apart", eyes), ramp(eyes, V.detailEyeSpacing))) }
-            let detailGroup = lowest(detailSignals)
+            var detailSignals: [(String, Float)] = [noted(String(format: "sharpness %.2f", sharp), sharp, "the face's sharpness, 0–1, used as it is")]
+            if let eyes = gates.eyeSpacingOriginal { detailSignals.append(ramped(String(format: "eyes %.0f px apart", eyes), eyes, V.detailEyeSpacing)) }
+            let detailGroup = lowest("detail", detailSignals)
 
             let groups: [Float] = [poseGroup, lightGroup, gazeGroup, expressionGroup, visibilityGroup, detailGroup]
             let t = zip(V.scoreWeightsV2, groups).reduce(Float(1)) { $0 * pow($1.1, $1.0.weight) }
@@ -3738,6 +3787,10 @@ struct MuseScore {
                     : (finalValue >= ViewController.fullLengthUsableFloor ? "B" : nil)
             }
             reasons = body.reasons
+            if outfitMultiplier < 1 {
+                let outfitWhy = [dressy && !ViewController.garmentCapsEnabled ? "dressy" : nil, busy ? "busy top" : nil].compactMap { $0 }.joined(separator: " and ")
+                reasons.append(String(format: "%@ ×%.2f", outfitWhy, outfitMultiplier))
+            }
         } else {
             self.parts = parts
             self.value = filter == nil ? banded : 0
@@ -3745,6 +3798,8 @@ struct MuseScore {
         self.filter = filter
         self.tier = tier
         self.reasons = reasons
+        self.signals = groupSignals
+        self.signalHows = hows
         self.wideEyesV2 = wideEyesV2
         self.body = body
     }
@@ -3823,6 +3878,14 @@ struct MuseScore {
         }
         if wideEyesV2 { fields["wideEyes"] = true }
         if let filter { fields["scoreFilter"] = filter }
+        // For the page's score sheet (`SHOW_SCORE_DETAILS`): what held each part
+        // under 1 and, on a v2 selfie, every signal behind each group.
+        if tier != nil || body != nil { fields["scoreReasons"] = reasons }
+        if !signals.isEmpty {
+            fields["scoreSignals"] = signals.mapValues { list in
+                list.map { ["why": $0.why, "value": (Double($0.value) * 100).rounded() / 100, "how": signalHows[$0.why] ?? ""] as [String: Any] }
+            }
+        }
         return fields
     }
 

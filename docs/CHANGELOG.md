@@ -20,13 +20,15 @@ onwards; those entries are kept for reference and need nothing on your side.
 
 ---
 
-## [Unreleased]
+## [1.3.9] — 2026-11-02
 
-**Mobile iOS only.** **Controller: update recommended.** The page is
-unchanged; the selfie ranking changes in the controller. The update replaces
-`ViewController.swift`, `FaceExpression.swift` and `ScanStore.swift`. The
-results store's rules version is 12, so the first scan after the update is a
-full one.
+**Mobile iOS only.** **Controller: update recommended.** The selfie ranking
+changes in the controller, and the page gains a score sheet for review. The
+update replaces `ViewController.swift`, `FaceExpression.swift` and
+`ScanStore.swift`. The results store's rules version is 12, so the first scan
+after the update is a full one. Without the controller update the sheet still
+opens, with the parts and readings but without the signals, reasons and order
+pieces.
 
 ### Changed
 
@@ -39,15 +41,16 @@ full one.
   the face read alike. Measured effect on the test libraries: selfies that
   Vision over-read moved up, several from Tier B to Tier A, and two that
   Vision had gated as pitched came back in at Tier B.
-- **A camera below the face costs the selfie.** Behind `cameraBelowFrom` and
-  `cameraBelowCap`, +1.5° and 0.6. When MediaPipe reads the camera looking up
-  at the face by 1.5° or more, the pose group is capped at 0.6. Measured on a
-  labelled set: eye level read −1.6°, above −3.8° and −7.3°, below with the
-  head fairly level +2.3° and +14.2°, below with the eyes looking down at
-  the phone +1.2°. On three libraries no selfie read between +1.4° and
-  +1.6°. `scoreInputs` reports the angles to two decimals, so the side of
-  the line a selfie falls on can be read. A head tipped down toward a low phone
-  reads level or above and is not caught.
+- **A camera below the face costs the selfie.** Behind `cameraBelowSlope`
+  (0° to 6°) and `cameraBelowCap` (0.6). When MediaPipe reads the camera
+  looking up at the face, the pose group loses a little for each degree: 0.83
+  at +1°, 0.67 at +2°, and 0.6 from +2.4° up, never lower. A slope rather than
+  a line, so a reading that moves by a tenth of a degree between two scans
+  moves the score a little, not by 14 percent. Measured on a labelled set:
+  eye level read −1.6°, above −3.8° and −7.3°, below with the head fairly
+  level +2.3° and +14.2°, below with the eyes looking down at the phone
+  +1.2°. `scoreInputs` reports the angles to two decimals. A head tipped down
+  toward a low phone reads level or above and is not caught.
 - **A frown caps expression at 0.6**, was 0.5 (`frownCap`), the value on the
   client's test sheets. The other expression caps stay at 0.5 and an open
   smile at 0.4. It moves only selfies whose sole expression cap is a frown,
@@ -55,10 +58,26 @@ full one.
 
 ### Added
 
+- **A score sheet on each tile.** Behind `SHOW_SCORE_DETAILS` in
+  `galleryConstants.ts`, on for review. Each scored tile shows an ⓘ in its
+  bottom-right corner; a tap opens a sheet from the bottom with the photo's
+  parts and weights, every signal behind each part with the one that set it
+  marked, a short explanation of each part, the calculation of the score and
+  of the grid order, and all the raw readings. The ⓘ works while the scan
+  runs. Off, the tiles are as before.
+- The controller sends, for the sheet: `scoreReasons` (what held each part
+  under 1; on a front or side also the outfit multiplier), `scoreSignals` (on
+  a selfie, every signal of each group with its 0–1 value and the working
+  behind it, shown under each signal on the sheet) and `orderParts`
+  (on a Tier A photo, `recency`, and on a selfie also `choices` and
+  `personal`).
 - `scoreInputs` on a selfie gains `mpPitch`, `mpYaw` and `mpRoll` (MediaPipe's
   head angle in degrees, pitch positive when the camera looks up at the
-  face), `faceRatio` (nose to brow over nose to chin) and `gazeUp`,
-  `gazeDown`, `gazeSide`. The last four are logged only.
+  face), `faceRatio` (nose to brow over nose to chin), `gazeUp`,
+  `gazeDown`, `gazeSide`, and `eyeYaw`, `eyePitch` (where the eyes point in
+  the head, in degrees, from the iris against the eye corners; yaw positive
+  toward the image's right, pitch positive downward). The last six are
+  logged only, for setting the gaze curve from labelled photos.
 
 ---
 
