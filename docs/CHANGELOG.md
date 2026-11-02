@@ -38,6 +38,17 @@ controllers keep working with this page.
   scan, sharp photos from 1 to 3 m read 0.06× to 0.23× of the usual and
   were withdrawn. Those keep the absolute blur filter. The shaken selfie is
   still withdrawn.
+- **Only a missing type can be picked.** With a selfie put down, only
+  selfies stay tappable in the picker; the same for front and side. Before,
+  any photo could fill the gap, so a third front could replace a side. A
+  photo whose type an older controller sends only after the tap is put back
+  down with "You already have enough {type} photos." when that type is full,
+  and analytics records `photo_type_full`. The camera top-up and the
+  pre-selection are unchanged. Behind `PICK_ONLY_MISSING_TYPE`.
+- **The grid tiles no longer show the score, the photo id or the ⓘ.**
+  `SHOW_SCORE_BADGE`, `SHOW_ID_BADGE` and `SHOW_SCORE_DETAILS` in
+  `galleryConstants.ts` are now false; the code stays, and setting them back
+  to true brings the review view back.
 
 ### Added
 

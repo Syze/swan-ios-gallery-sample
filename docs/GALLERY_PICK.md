@@ -82,7 +82,9 @@ Intro ─> Gender* ─> Height** ─> Selfie ─> Searching ─┬─> Picker �
    with the matches; the rest of the grid follows by the host's `order`
    (its `score` from an older host), best first.
    That is the one moment tiles move. The user can change any of
-   them; a coverage row tracks what the selection still needs. Front and side
+   them; a coverage row tracks what the selection still needs. Only a type the
+   selection is still short of can be picked: with the selfie put down, only
+   selfies stay tappable, and the same for front and side. Front and side
    shots must be full length; a selfie is exempt. Nothing uploads until Build
    is tapped.
 
@@ -1074,6 +1076,13 @@ controllers keep working with this page.
   sent again, and the page now uses the new values.
 - Selfies looking off the camera, shot from far below or above, too dark, or
   blurred against the shopper's other close selfies are ruled out.
+- In the picker, only a type the selection is still short of can be picked.
+  Put a selfie down and only selfies stay tappable; the same for front and
+  side. A photo whose type an older controller sends only after the tap is
+  put back down, with a short message, when its type is already full.
+- The grid tiles no longer show the score, the photo id or the ⓘ score
+  sheet. The switches in `galleryConstants.ts` (`SHOW_SCORE_BADGE`,
+  `SHOW_ID_BADGE`, `SHOW_SCORE_DETAILS`) bring them back for review.
 
 **Setup**
 

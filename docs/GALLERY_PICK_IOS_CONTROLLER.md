@@ -183,9 +183,9 @@ during the scan.
 
 The page has review switches of its own in `galleryConstants.ts`:
 `SHOW_SCORE_BADGE` and `SHOW_ID_BADGE` put the score and the first 8
-characters of the photo id on each tile, and `SHOW_TIER_BADGE` (off) adds
-the tier. They are compiled into the page, so turning them off is a
-release.
+characters of the photo id on each tile, `SHOW_SCORE_DETAILS` adds the ⓘ
+that opens the score sheet, and `SHOW_TIER_BADGE` adds the tier. All four
+are off. They are compiled into the page, so turning them on is a release.
 
 ## Processing cost
 
