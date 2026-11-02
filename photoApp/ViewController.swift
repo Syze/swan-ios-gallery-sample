@@ -1411,11 +1411,13 @@ extension ViewController {
     /// 2026): the face-skin pixels' mean a* (`FaceCover.skinA`) less the median
     /// over the person's selfies — see `selfieUsualEnabled`. A magenta or warm
     /// light on the face raises it; against the usual, so skin tone itself is
-    /// never scored. Full marks to 1 under the usual, zero at 12 over it
-    /// (`skinCast`), in place of the red-green-blue order rule. Off, or without
-    /// a segmenter reading: the order rule.
+    /// never scored. Full marks to 4 under the usual, zero at 22 over it
+    /// (`skinCast`), so a face at its usual redness scores 0.85: a shallow
+    /// line, since a cast is a mild fault next to pose or expression. In place
+    /// of the red-green-blue order rule. Off, or without a segmenter reading:
+    /// the order rule.
     static let skinCastEnabled = true
-    static let skinCast: (good: Float, bad: Float) = (-1, 12)
+    static let skinCast: (good: Float, bad: Float) = (-4, 22)
     /// Gaze from where the irises sit in the eyes (2 Nov 2026), against the
     /// person's usual — see `selfieUsualEnabled`: `FaceExpression.irisAlong` and
     /// `irisAcross`, and how far the pair is from the person's median. A look at
