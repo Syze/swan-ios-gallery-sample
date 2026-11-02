@@ -1469,6 +1469,11 @@ extension ViewController {
     /// and `glassesCap`. With glasses on, this much is taken off the covered
     /// share first, and the cap is what they cost. 0: no allowance, as before.
     static let glassesOvalAllowance: Float = 0.08
+    /// Glare on glasses lowers visibility (2 Nov 2026): with glasses on, the
+    /// share of the lens area that reflects (`FaceCover.glare`), full marks to
+    /// 0.02, zero at 0.25 (`lensGlare`). Off: glasses cost the cap alone.
+    static let lensGlareEnabled = true
+    static let lensGlare: (good: Float, bad: Float) = (0.02, 0.25)
     static let glassesConfidence: Float = 0.5
     /// Detail: eye spacing in the original's pixels; sharpness keeps its 1.3.x
     /// reading.
@@ -3814,6 +3819,7 @@ struct MuseScore {
             if let ratio = cover.skinSideRatio { readings["skinSideRatio"] = fixed(ratio, 3) }
             if let lightness = cover.skinL { readings["skinL"] = fixed(lightness, 2) }
             if let redness = cover.skinA { readings["skinA"] = fixed(redness, 2) }
+            if let glare = cover.glare { readings["lensGlare"] = fixed(glare, 3) }
             readings["coverHairline"] = fixed(cover.hairline, 2)
             readings["coverJaw"] = fixed(cover.jaw, 2)
             readings["coverFace"] = fixed(cover.face, 2)
@@ -3947,6 +3953,9 @@ struct MuseScore {
             if let cover {
                 let visible = 1 - max(0, cover.face - (glassesOn ? V.glassesOvalAllowance : 0))
                 visibilitySignals.append(ramped(String(format: "face %.0f%% visible", visible * 100), visible * 100, (V.visibilityShare.good * 100, V.visibilityShare.bad * 100)))
+            }
+            if V.lensGlareEnabled, glassesOn, let glare = cover?.glare {
+                visibilitySignals.append(ramped(String(format: "glare on the lenses %.2f", glare), glare, V.lensGlare))
             }
             if (labels["eyeglasses"] ?? 0) >= V.glassesConfidence { visibilitySignals.append(noted("glasses", V.glassesCap, "glasses label \(n(labels["eyeglasses"] ?? 0)), at or over \(n(V.glassesConfidence)): capped at \(n(V.glassesCap))")) }
             let visibilityGroup = lowest("visibility", visibilitySignals)

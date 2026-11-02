@@ -41,6 +41,13 @@ struct FaceCover {
     /// The skin's mean redness, CIELAB a*, over its face-skin pixels: a magenta
     /// or warm cast on the face raises it.
     var skinA: Float? = nil
+    /// The skin's median brightness (luma 0–1), the yardstick for the eye reads.
+    var skinMedian: Float? = nil
+    /// Glare on glasses: the share of the lens area around each eye (the eye's
+    /// corner span widened, less the iris) that is clearly brighter than the
+    /// skin and nearly colourless — a reflection of a window or a screen — the
+    /// larger of the two eyes. Read on the full-size crop.
+    var glare: Float? = nil
 
     static let modelName = "selfie_multiclass_256x256"
     /// The crop's longer side is brought down to this before the model, which
@@ -82,6 +89,7 @@ struct FaceCover {
             + (skinSideRatio.map { String(format: "; skin sides %.2f×", $0) } ?? "")
             + (skinL.map { String(format: " L %.1f", $0) } ?? "")
             + (skinA.map { String(format: " a %.1f", $0) } ?? "")
+            + (glare.map { String(format: "; lens glare %.2f", $0) } ?? "")
     }
 
     /// Reads the head crop. `face` is Vision's face box inside the crop, in the
@@ -143,6 +151,7 @@ struct FaceCover {
         if let landmarks, landmarks.count >= 468, let pixels = rgba(small) {
             cover.readSkin(mask: data, width: mw, height: mh, pixels: pixels, imageWidth: small.width,
                            imageHeight: small.height, landmarks: landmarks)
+            cover.readEyes(headCrop: headCrop, landmarks: landmarks)
         }
         cover.ms = Int(Date().timeIntervalSince(started) * 1000)
         return cover
@@ -175,11 +184,47 @@ struct FaceCover {
         if count > 100 {
             skinL = sumL / Float(count)
             skinA = sumA / Float(count)
+            skinMedian = Self.median(sideA + sideB)
         }
         if sideA.count > 50, sideB.count > 50 {
             let a = Self.median(sideA), b = Self.median(sideB)
             skinSideRatio = max(a, b) / max(min(a, b), 0.01)
         }
+    }
+
+    /// The readings around the eyes, on the full-size crop, against the skin's
+    /// brightness. Needs the landmarker's iris points (468–477).
+    private mutating func readEyes(headCrop: CGImage, landmarks: [CGPoint]) {
+        guard let skin = skinMedian, landmarks.count >= 478 else { return }
+        let cw = CGFloat(headCrop.width), ch = CGFloat(headCrop.height)
+        func p(_ i: Int) -> CGPoint { CGPoint(x: landmarks[i].x * cw, y: landmarks[i].y * ch) }
+        let eyes: [(outer: Int, inner: Int, iris: Int, rim: (Int, Int))] = [(33, 133, 468, (469, 471)), (263, 362, 473, (474, 476))]
+        var glares: [Float] = []
+        for eye in eyes {
+            let outer = p(eye.outer), inner = p(eye.inner), iris = p(eye.iris)
+            let width = hypot(inner.x - outer.x, inner.y - outer.y)
+            let radius = hypot(p(eye.rim.0).x - p(eye.rim.1).x, p(eye.rim.0).y - p(eye.rim.1).y) / 2
+            guard width > 4 else { continue }
+            let lens = CGRect(x: (outer.x + inner.x) / 2 - 0.9 * width, y: iris.y - 0.6 * width, width: 1.8 * width, height: 1.2 * width)
+                .intersection(CGRect(x: 0, y: 0, width: cw, height: ch)).integral
+            guard lens.width >= 4, lens.height >= 4, let cropped = headCrop.cropping(to: lens),
+                  let pixels = Self.rgba(cropped) else { continue }
+            let w = cropped.width, h = cropped.height
+            var total = 0, bright = 0
+            for y in 0..<h {
+                for x in 0..<w {
+                    let px = lens.minX + CGFloat(x) + 0.5, py = lens.minY + CGFloat(y) + 0.5
+                    if hypot(px - iris.x, py - iris.y) <= 0.9 * radius { continue }
+                    let i = (y * w + x) * 4
+                    let r = Float(pixels[i]) / 255, g = Float(pixels[i + 1]) / 255, b = Float(pixels[i + 2]) / 255
+                    let luma = 0.299 * r + 0.587 * g + 0.114 * b
+                    total += 1
+                    if luma > max(0.55, skin + 0.2) && max(r, g, b) - min(r, g, b) < 0.3 { bright += 1 }
+                }
+            }
+            if total >= 20 { glares.append(Float(bright) / Float(total)) }
+        }
+        glare = glares.max()
     }
 
     /// sRGB, 0–1, to CIELAB under D65.
