@@ -1335,6 +1335,13 @@ extension ViewController {
     /// and Vision has no sign, so a camera above and below read alike. Off,
     /// or without a MediaPipe reading: Vision's pitch, as before.
     static let mediaPipePitchEnabled = true
+    /// The v2 pose group reads the head's roll from MediaPipe's face transform
+    /// (`FaceExpression.headRoll`) instead of Vision's, on `mediaPipeRoll`
+    /// (2 Nov 2026): the transform's roll tracks a tilted head more closely than
+    /// Vision's box. Off, or without a MediaPipe reading: Vision's roll on
+    /// `poseRoll`, as before.
+    static let mediaPipeRollEnabled = true
+    static let mediaPipeRoll: (good: Float, bad: Float) = (2, 30)
     /// A camera below the face: MediaPipe's pitch is positive when the camera
     /// looks up at the face. From `cameraBelowFrom` degrees the pose group is
     /// capped at `cameraBelowCap`. Measured 31 Oct 2026 on a labelled set:
@@ -3577,6 +3584,9 @@ struct MuseScore {
         // The pitch the v2 selfie rules read — see `mediaPipePitchEnabled`.
         let signedPitch: Float? = ViewController.mediaPipePitchEnabled ? expression?.headPitch : nil
         let selfiePitch = signedPitch.map { abs($0) } ?? pitch
+        // The roll the v2 selfie pose group reads — see `mediaPipeRollEnabled`.
+        let mediaPipeRoll: Float? = ViewController.mediaPipeRollEnabled ? expression?.headRoll.map { abs($0) } : nil
+        let selfieRoll = mediaPipeRoll ?? roll
         if let gates {
             if selfiePitch > ViewController.gatePitchDegrees { filter = filter ?? "head pitched" }
             if yaw > ViewController.gateYawDegrees { filter = filter ?? "head turned" }
@@ -3775,7 +3785,7 @@ struct MuseScore {
             var poseSignals: [(String, Float)] = [
                 ramped(String(format: "pitch %.0f°", selfiePitch), selfiePitch, V.posePitch),
                 ramped(String(format: "yaw %.0f°", yaw), yaw, V.poseYaw),
-                ramped(String(format: "roll %.0f°", roll), roll, V.poseRoll),
+                ramped(String(format: "roll %.0f°", selfieRoll), selfieRoll, mediaPipeRoll == nil ? V.poseRoll : V.mediaPipeRoll),
             ]
             if let cm = cameraCm { poseSignals.append(ramped(String(format: "camera %.0f cm", cm), cm, V.poseDistance)) }
             if let slope = V.cameraBelowSlope, let p = signedPitch, p > slope.good {
