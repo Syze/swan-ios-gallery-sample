@@ -1378,6 +1378,14 @@ extension ViewController {
     /// Bright only (30 Oct 2026): the face box takes in hair, beard and a
     /// night background, and counting black pixels zeroed well-lit selfies.
     static let lightEvenness: (good: Float, bad: Float) = (1.3, 2.0)
+    /// Evenness read on the face's skin pixels (2 Nov 2026): the segmenter's
+    /// face-skin class, split on the face's own midline — see
+    /// `FaceCover.skinSideRatio` — instead of the two halves of the face box,
+    /// which take in hair, glasses frames and the background beside the head.
+    /// Full marks to 1.05, zero at 2.0 (`skinEvenness`). Off, or when the
+    /// segmenter gave no reading: the face box on `lightEvenness`.
+    static let skinEvennessEnabled = true
+    static let skinEvenness: (good: Float, bad: Float) = (1.05, 2.0)
     static let lightBacklight: (good: Float, bad: Float) = (0.8, 0.4)
     static let lightClipped: (good: Float, bad: Float) = (0.01, 0.05)
     /// Expression: each of these caps the group. A closed smile, eyes held
@@ -3459,7 +3467,7 @@ struct MuseScore {
     init(face: VNFaceObservation, in image: CGImage, handler: VNImageRequestHandler, faceWidth: CGFloat,
          expression: FaceExpression? = nil, labels: [String: Float] = [:], handOnFace: Bool = false,
          outfit: Outfit = Outfit(label: nil, dressy: 0, busy: 0), selfie: Bool = false, gates: SelfieGates? = nil,
-         coverReader: (() -> FaceCover?)? = nil, document: DocumentRead? = nil, body: BodyScore? = nil) {
+         coverReader: ((FaceExpression?) -> FaceCover?)? = nil, document: DocumentRead? = nil, body: BodyScore? = nil) {
         let clamp = { (v: Float) in max(0, min(1, v)) }
         var parts: [(name: String, value: Float)] = []
         var filter: String?
@@ -3643,14 +3651,14 @@ struct MuseScore {
             // dropped; with the gates off it runs for every selfie, to be logged.
             if ViewController.coverGatesEnabled {
                 if capped { filter = filter ?? "cap or hat" }
-                if filter == nil { cover = coverReader?() }
+                if filter == nil { cover = coverReader?(expression) }
                 if let cover {
                     if cover.hairline >= ViewController.coverHairlineLimit { filter = filter ?? "hairline covered" }
                     if cover.jaw >= ViewController.coverJawLimit { filter = filter ?? "jaw covered" }
                     if cover.face >= ViewController.coverFaceLimit { filter = filter ?? "face covered" }
                 }
             } else {
-                cover = coverReader?()
+                cover = coverReader?(expression)
             }
         }
         // A covered jaw moves the chin the face ratio reads; the jaw gate rules
@@ -3726,6 +3734,7 @@ struct MuseScore {
             if let camera = gates.camera { readings["cameraData"] = camera.present ? 1 : 0 }
         }
         if let cover {
+            if let ratio = cover.skinSideRatio { readings["skinSideRatio"] = fixed(ratio, 3) }
             readings["coverHairline"] = fixed(cover.hairline, 2)
             readings["coverJaw"] = fixed(cover.jaw, 2)
             readings["coverFace"] = fixed(cover.face, 2)
@@ -3819,8 +3828,12 @@ struct MuseScore {
 
             var lightSignals: [(String, Float)] = []
             if let f = faceStats {
-                let bright = max(f.left, f.right), dark = max(min(f.left, f.right), 0.01)
-                lightSignals.append(ramped(String(format: "uneven light %.1f×", bright / dark), bright / dark, V.lightEvenness))
+                if V.skinEvennessEnabled, let ratio = cover?.skinSideRatio {
+                    lightSignals.append(ramped(String(format: "uneven light %.2f× on the skin", ratio), ratio, V.skinEvenness))
+                } else {
+                    let bright = max(f.left, f.right), dark = max(min(f.left, f.right), 0.01)
+                    lightSignals.append(ramped(String(format: "uneven light %.1f×", bright / dark), bright / dark, V.lightEvenness))
+                }
                 if let whole = imageStats {
                     let ratio = f.mean / max(whole.mean, 0.01)
                     lightSignals.append(ramped(String(format: "backlit %.2f", ratio), ratio, V.lightBacklight))
@@ -5771,7 +5784,7 @@ extension ViewController {
     /// What the Muse score needs for one matched photo: expression and labels from the
     /// head crop, a hand over the face, and the outfit. Well under 100ms together.
     func museContext(face: VNFaceObservation, in image: CGImage, handler: VNImageRequestHandler, readCover: Bool = false)
-        -> (expression: FaceExpression?, labels: [String: Float], handOnFace: Bool, outfit: MuseScore.Outfit, coverReader: (() -> FaceCover?)?,
+        -> (expression: FaceExpression?, labels: [String: Float], handOnFace: Bool, outfit: MuseScore.Outfit, coverReader: ((FaceExpression?) -> FaceCover?)?,
             document: MuseScore.DocumentRead?) {
         let head = MuseScore.headBox(face.boundingBox)
         let w = CGFloat(image.width), h = CGFloat(image.height)
@@ -5788,12 +5801,15 @@ extension ViewController {
         // score as a closure so it runs only when no cheaper gate has already
         // dropped the photo: at about 200 ms a read it was most of the score's
         // time on a library of test selfies.
-        var coverReader: (() -> FaceCover?)?
+        // Given the expression read on the same crop, for the face's geometry.
+        var coverReader: ((FaceExpression?) -> FaceCover?)?
         if readCover, let headCrop {
             let faceRect = CGRect(x: face.boundingBox.minX * w, y: (1 - face.boundingBox.maxY) * h,
                                   width: face.boundingBox.width * w, height: face.boundingBox.height * h)
                 .offsetBy(dx: -headRect.minX, dy: -headRect.minY)
-            coverReader = { [self] in timed("score.cover") { FaceCover.read(headCrop: headCrop, face: faceRect) } }
+            coverReader = { [self] expression in
+                timed("score.cover") { FaceCover.read(headCrop: headCrop, face: faceRect, landmarks: expression?.landmarks) }
+            }
         }
         if let headCrop {
             let classify = VNClassifyImageRequest()

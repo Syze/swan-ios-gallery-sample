@@ -77,6 +77,10 @@ struct FaceExpression {
     let headPitch: Float?
     let headYaw: Float?
     let headRoll: Float?
+    /// The landmarker's points in the head crop, 0–1 with the origin at the top
+    /// left, for readers of the same crop that need the face's geometry — see
+    /// `FaceCover.read`. Empty without landmarks.
+    let landmarks: [CGPoint]
     let ms: Int
 
     /// The more open eye: a wink leaves one eye open and scores low here while
@@ -209,6 +213,7 @@ struct FaceExpression {
             headPitch: headPitch,
             headYaw: headYaw,
             headRoll: headRoll,
+            landmarks: (result.faceLandmarks.first ?? []).map { CGPoint(x: CGFloat($0.x), y: CGFloat($0.y)) },
             ms: Int(Date().timeIntervalSince(started) * 1000))
     }
 }
