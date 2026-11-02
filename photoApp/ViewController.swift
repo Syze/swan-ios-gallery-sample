@@ -1362,6 +1362,17 @@ extension ViewController {
     /// that moves by that much between two scans of one photo. Replayed on the
     /// three latest reports: no pick or tier changed. Nil: the step.
     static let cameraBelowSlope: (good: Float, bad: Float)? = (0, 6)
+    /// Camera height from the face itself, against the person's usual (2 Nov
+    /// 2026), in place of the camera-below slope and step above. The reading is
+    /// `FaceExpression.faceRatio`, nose to brow over nose to chin: a camera below
+    /// the face shows the lower face larger, so the ratio falls. Each person's
+    /// proportions differ, so it is read against their usual — see
+    /// `selfieUsualEnabled` — on `cameraHeightRatio`, as a pose signal: full
+    /// marks at 1.05 of the usual, zero at 0.75. It cannot tell a camera below
+    /// from a raised chin at eye level; the two look alike in the face. Off: the
+    /// camera-below slope.
+    static let cameraHeightFromFaceRatio = true
+    static let cameraHeightRatio: (good: Float, bad: Float) = (1.05, 0.75)
     /// Light: the brighter half of the face over the darker half; the face
     /// over the whole frame (backlight); the share of blown-out face pixels.
     /// Bright only (30 Oct 2026): the face box takes in hair, beard and a
@@ -3581,6 +3592,8 @@ struct MuseScore {
         var cameraFrom: String?
         var focalAssumed = false
         var cover: FaceCover?
+        // Readings judged against the person's usual — see `finished(usual:)`.
+        var selfieReadings: [String: Float] = [:]
         // The pitch the v2 selfie rules read — see `mediaPipePitchEnabled`.
         let signedPitch: Float? = ViewController.mediaPipePitchEnabled ? expression?.headPitch : nil
         let selfiePitch = signedPitch.map { abs($0) } ?? pitch
@@ -3640,6 +3653,13 @@ struct MuseScore {
                 cover = coverReader?()
             }
         }
+        // A covered jaw moves the chin the face ratio reads; the jaw gate rules
+        // such a selfie out anyway, and the reference selfie is not gated.
+        if gates != nil, ViewController.cameraHeightFromFaceRatio, let ratio = expression?.faceRatio,
+           (cover?.jaw ?? 0) < ViewController.coverJawLimit {
+            selfieReadings["faceRatio"] = ratio
+        }
+        self.selfieReadings = selfieReadings
         self.cameraCm = cameraCm
         self.cameraFrom = cameraFrom
         self.focalAssumed = focalAssumed
@@ -3788,11 +3808,11 @@ struct MuseScore {
                 ramped(String(format: "roll %.0f°", selfieRoll), selfieRoll, mediaPipeRoll == nil ? V.poseRoll : V.mediaPipeRoll),
             ]
             if let cm = cameraCm { poseSignals.append(ramped(String(format: "camera %.0f cm", cm), cm, V.poseDistance)) }
-            if let slope = V.cameraBelowSlope, let p = signedPitch, p > slope.good {
+            if !V.cameraHeightFromFaceRatio, let slope = V.cameraBelowSlope, let p = signedPitch, p > slope.good {
                 let sloped = ramp(p, slope)
                 poseSignals.append(noted(String(format: "camera below %+.1f°", p), max(sloped, V.cameraBelowCap),
                     "(\(n(slope.bad)) − \(n(p))) ÷ (\(n(slope.bad)) − \(n(slope.good))) = \(String(format: "%.2f", sloped))" + (sloped < V.cameraBelowCap ? ", never under \(n(V.cameraBelowCap))" : "")))
-            } else if V.cameraBelowSlope == nil, let below = V.cameraBelowFrom, let p = signedPitch, p >= below {
+            } else if !V.cameraHeightFromFaceRatio, V.cameraBelowSlope == nil, let below = V.cameraBelowFrom, let p = signedPitch, p >= below {
                 poseSignals.append(noted(String(format: "camera below %+.0f°", p), V.cameraBelowCap, "\(n(p))° is at or over +\(n(below))°: capped at \(n(V.cameraBelowCap))"))
             }
             let poseGroup = lowest("pose", poseSignals)
@@ -3915,9 +3935,17 @@ struct MuseScore {
     /// `finishable` comes back unchanged.
     func finished(usual: [String: Float]) -> MuseScore {
         guard finishable else { return self }
-        let finished = self
-        // Signals and gates read against `usual` are added here.
-        _ = usual
+        typealias V = ViewController
+        var finished = self
+        // Read against the usual, as the reading over it.
+        func relative(_ name: String) -> Float? {
+            guard let reading = selfieReadings[name], let typical = usual[name], typical != 0 else { return nil }
+            finished.readings["\(name)Usual"] = (Double(typical) * 1000).rounded() / 1000
+            return reading / typical
+        }
+        if V.cameraHeightFromFaceRatio, let ratio = relative("faceRatio") {
+            finished.addRamped("pose", String(format: "camera height %.2f× usual", ratio), ratio, V.cameraHeightRatio)
+        }
         return finished.settled()
     }
 
