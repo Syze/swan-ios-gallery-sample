@@ -109,6 +109,9 @@ final class ViewController: UIViewController {
     var isLimitedAccess = false
     /// The selfie's identity vector — what every library face is measured against.
     var referenceEmbedding: [Float]?
+    /// The reference selfie's own readings, one sample of the person's usual —
+    /// see `selfieUsualEnabled`. Empty until a reference is ready.
+    var referenceReadings: [String: Float] = [:]
 
     /// The other selfie frames' vectors, only under `matchAgainstAllFrames`.
     var extraReferenceEmbeddings: [[Float]] = []
@@ -1230,6 +1233,18 @@ extension ViewController {
     static let relativeEyeGateEnabled = true
     static let relativeOpenness: Float = 0.4
     static let relativeBaselineMin = 3
+    /// Selfies judged against the person's own (2 Nov 2026). Several selfie
+    /// signals read a face against the same person's usual: how open their eyes
+    /// usually are, where their irises usually sit, their usual skin tone. That
+    /// usual is the median over the scan's selfies, so it is known only when the
+    /// scan ends. On, a selfie that passed the gates is kept back like a match
+    /// the gap rule holds, its readings are kept, and once the scan is over each
+    /// is finished against the medians (`MuseScore.finished(usual:)`) before it
+    /// is sent; one a gate read against the median rules out is never shown.
+    /// Fronts and sides still stream. The reference selfie taken in the flow is
+    /// read the same way and joins the median, so there is no minimum count.
+    /// Off: selfies stream with their score as found.
+    static let selfieUsualEnabled = true
 
     /// The v2 selfie score — GALLERY_PICK_V2_PLAN.md, item 3. On, a selfie
     /// that passed the gates scores T, 0 to 1: six groups, each the lowest of
@@ -1804,6 +1819,10 @@ extension ViewController {
             let warmHands = VNDetectHumanHandPoseRequest()
             try? VNImageRequestHandler(cgImage: selfieCG, orientation: .up, options: [:]).perform([warmHands])
 
+            // The selfie taken in the flow is one sample of the person's usual —
+            // see `selfieUsualEnabled`. Read as a library selfie is, once.
+            self.referenceReadings = Self.selfieUsualEnabled ? self.readings(ofReference: selfieCG) : [:]
+
             self.saveDebugImage(selfie, name: "00-selfie")
             if let croppedSelfie = self.croppedFace(from: selfie) {
                 self.saveDebugImage(croppedSelfie, name: "00-reference-crop")
@@ -1962,6 +1981,9 @@ extension ViewController {
             // Matches between `gapCutFloor` and the cut-off: held back until the gap
             // is known, then appended so nothing on screen moves.
             var heldIds: [String] = []
+            // Selfies kept back to be finished against the person's usual — see
+            // `selfieUsualEnabled` — with what the finish needs.
+            var selfieHeld: [String: (score: MuseScore, asset: PHAsset)] = [:]
             // Faces under `gapCutCeiling` with their vectors, for the own-photo
             // check — see `ownPhotoLogEnabled`. `matched` is false for a no-match.
             var nearFaces: [(n: Int, id: String, distance: Float, type: String, matched: Bool, vector: [Float])] = []
@@ -2389,8 +2411,15 @@ extension ViewController {
                             // A match the gap rule could still withdraw is held back:
                             // a tile that vanishes is worse than one that arrives late.
                             let held = Self.gapCutEnabled && distance >= Self.gapCutFloor
+                            // A selfie to be finished against the person's usual waits
+                            // for the end of the scan as well — see `selfieUsualEnabled`.
+                            if Self.selfieUsualEnabled, type == .selfie, let museScore, museScore.finishable {
+                                selfieHeld[matchedId] = (museScore, asset)
+                            }
                             if held {
                                 heldIds.append(matchedId)
+                            } else if selfieHeld[matchedId] != nil {
+                                // Sent with the held matches at the end.
                             } else {
                                 var matchPayload: [String: Any] = ["assetId": matchedId,
                                                                    "type": matchedType,
@@ -2420,7 +2449,7 @@ extension ViewController {
                                     self?.sendToWeb(["type": "onGalleryMatchFound", "payload": matchPayload])
                                 }
                             }
-                            if Self.verboseLogging { print("  ✅ [\(n)] id=\(asset.localIdentifier.prefix(8)) MATCH\(held ? " (held)" : "")     d=\(String(format: "%.3f", distance)) cut=\(String(format: "%.2f", cutoff))  \(px) \(orient)  face=\(facePixels)px eyes=\(self?.lastEyeSpacing.map { String(format: "%.0f", $0) } ?? "?")px joints=\(body.lowerJoints)\(body.byKnees ? " knee-length" : "") type=\(type.rawValue) shoulders=\(body.shoulderSpread.map { String(format: "%.2f (~%.0f°)", $0, Self.turnDegrees(spread: $0)) } ?? "–") original=\((originalBytes ?? 0) / 1024)KB  [\(scores)]  \((orderFields["order"] as? Double).map { String(format: "order=%.3f  ", $0) } ?? "")\(museScore?.note ?? "")") }
+                            if Self.verboseLogging { print("  ✅ [\(n)] id=\(asset.localIdentifier.prefix(8)) MATCH\(held || selfieHeld[asset.localIdentifier] != nil ? " (held)" : "")     d=\(String(format: "%.3f", distance)) cut=\(String(format: "%.2f", cutoff))  \(px) \(orient)  face=\(facePixels)px eyes=\(self?.lastEyeSpacing.map { String(format: "%.0f", $0) } ?? "?")px joints=\(body.lowerJoints)\(body.byKnees ? " knee-length" : "") type=\(type.rawValue) shoulders=\(body.shoulderSpread.map { String(format: "%.2f (~%.0f°)", $0, Self.turnDegrees(spread: $0)) } ?? "–") original=\((originalBytes ?? 0) / 1024)KB  [\(scores)]  \((orderFields["order"] as? Double).map { String(format: "order=%.3f  ", $0) } ?? "")\(museScore?.note ?? "")") }
                         }
                     }
 
@@ -2689,6 +2718,39 @@ extension ViewController {
             let elapsed = Date().timeIntervalSince(startedAt)
             let rate = Double(examined) / max(elapsed, 0.001)
 
+            // Selfies finished against the person's usual — see `selfieUsualEnabled`.
+            // A selfie a gate rules out now was never shown: it leaves the list
+            // without a `dropped` entry, and is not remembered as unusable, since
+            // the next scan's usual may differ.
+            var usualDropped: [String] = []
+            if Self.selfieUsualEnabled, !selfieHeld.isEmpty {
+                let usual = MuseScore.usual(of: selfieHeld.values.map(\.score), reference: self?.referenceReadings ?? [:])
+                for (id, held) in selfieHeld where matchedIds.contains(id) {
+                    let finished = held.score.finished(usual: usual)
+                    if let why = finished.filter {
+                        usualDropped.append(id)
+                        unusableFace += 1
+                        unusableGates[why, default: 0] += 1
+                        found[.selfie, default: 0] -= 1
+                        if Self.verboseLogging { print("  \u{1f648} id=\(id.prefix(8)) unusable face against the usual — \(why)  \(finished.note)") }
+                    } else if let distance = matchScores[id]?.distance {
+                        let orderFields = Self.orderFields(asset: held.asset, type: .selfie, score: finished)
+                        matchScores[id] = (distance, .selfie, finished.value, finished.breakdown.merging(orderFields) { _, new in new })
+                        if Self.verboseLogging { print("  \u{2705} id=\(id.prefix(8)) finished against the usual  \((orderFields["order"] as? Double).map { String(format: "order=%.3f  ", $0) } ?? "")\(finished.note)") }
+                    }
+                }
+                if !usualDropped.isEmpty {
+                    let droppedSet = Set(usualDropped)
+                    matchedIds.removeAll { droppedSet.contains($0) }
+                    heldIds.removeAll { droppedSet.contains($0) }
+                    eval.regate(droppedSet, to: .unusableFace)
+                }
+                if Self.verboseLogging {
+                    let line = usual.sorted { $0.key < $1.key }.map { String(format: "%@ %.3f", $0.key, $0.value) }.joined(separator: ", ")
+                    print("  \u{1f9ee} usual over \(selfieHeld.count) selfie(s) and the reference: \(line.isEmpty ? "no readings" : line) — withdrew \(usualDropped.count)")
+                }
+            }
+
             // The relative eye gate — see `relativeEyeGateEnabled`: with every
             // selfie in, the shopper's usual openness is the median over the clean
             // ones, and a selfie whose more closed eye is under `relativeOpenness`
@@ -2812,7 +2874,7 @@ extension ViewController {
             // after the local pass. Nothing moves when the scan ends — the page keeps
             // the tiles where the tester watched them arrive, and the matches held
             // back for the gap rule go after them, so they only ever appear.
-            let heldSet = Set(heldIds)
+            let heldSet = Set(heldIds).union(selfieHeld.keys)
             let ordered = matchedIds.filter { !heldSet.contains($0) } + matchedIds.filter { heldSet.contains($0) }
                 // Excluded matches last, after everything shown — see `sendExcludedMatches`.
                 + excludedIds
@@ -3103,11 +3165,14 @@ struct FaceMetrics {
 /// How well a matched photo would serve the Muse: neutral, straight to the camera,
 /// eyes open, well lit, sharp. 0–1, 0 when a hard filter rules it out. Sent as `score`.
 struct MuseScore {
-    let value: Float
+    /// Variables, not constants, for these and the selfie fields below: a selfie
+    /// held to the end of the scan is finished against the person's usual
+    /// readings — see `finished(usual:)` and `ViewController.selfieUsualEnabled`.
+    var value: Float
     /// Each signal 0–1, in `weights` order.
-    let parts: [(name: String, value: Float)]
+    var parts: [(name: String, value: Float)]
     /// The hard filter that zeroed the score, if one did.
-    let filter: String?
+    var filter: String?
     /// What the expression reader saw, when it ran — see `FaceExpression`.
     let expression: FaceExpression?
     /// Vision's classifier on the head crop, the labels the score reads.
@@ -3136,15 +3201,15 @@ struct MuseScore {
     /// Under `ViewController.selfieScoreV2`, a selfie's tier, "A" or "B", and
     /// what held each of its groups under 1, for the console. Nil and empty
     /// for every other photo, and for a selfie a gate ruled out.
-    let tier: String?
-    let reasons: [String]
+    var tier: String?
+    var reasons: [String]
     /// Under `ViewController.selfieScoreV2`, every signal of each group with its
     /// 0–1 value, the lowest of which set the group. Sent as `scoreSignals`, for
     /// the page's score sheet. Empty for every other photo.
-    let signals: [String: [(why: String, value: Float)]]
+    var signals: [String: [(why: String, value: Float)]]
     /// The working behind each of `signals`, by its `why`: the reading against
     /// its curve, or the line that capped it. Sent as each signal's `how`.
-    let signalHows: [String: String]
+    var signalHows: [String: String]
     /// Under `ViewController.selfieScoreV2`, eyes held wide or raised brows —
     /// see `ViewController.wideEyesLine`. Sent as `wideEyes`.
     let wideEyesV2: Bool
@@ -3210,7 +3275,14 @@ struct MuseScore {
     /// The raw readings the parts were worked out from: angles in degrees, face
     /// width in pixels, the rest as the detectors report them. Sent in
     /// `breakdown` as `scoreInputs`.
-    let readings: [String: Double]
+    var readings: [String: Double]
+    /// A selfie's readings that are judged against the person's own, by name,
+    /// kept until the end of the scan — see `finished(usual:)`. Empty for every
+    /// other photo, and for a selfie a gate ruled out.
+    var selfieReadings: [String: Float] = [:]
+    /// Pupil to pupil in the original's pixels, for the Tier A floor when the
+    /// score is finished — see `ViewController.tierAEyeSpacingMin`.
+    var eyeSpacing: Float?
     /// Camera to face in centimetres and what it was read from (`iris` or
     /// `eyes`), when the v2 selfie gates ran; whether the focal length was
     /// assumed — see `ViewController.assumedFocal35mm`.
@@ -3802,6 +3874,83 @@ struct MuseScore {
         self.signalHows = hows
         self.wideEyesV2 = wideEyesV2
         self.body = body
+        self.eyeSpacing = gates?.eyeSpacingOriginal
+    }
+
+    /// A selfie scored by the v2 rules and not ruled out by a gate: the photos
+    /// whose score is finished at the end of the scan.
+    var finishable: Bool { ViewController.selfieScoreV2 && tier != nil && filter == nil && body == nil }
+
+    /// The person's usual readings: for each of `selfieReadings`, the median over
+    /// the finishable selfies of the scan and the reference selfie taken in the
+    /// flow. No minimum count: the reference is always one sample, so a single
+    /// library selfie is judged against the midpoint of itself and the
+    /// reference, and with many the reference is one vote among them.
+    static func usual(of scores: [MuseScore], reference: [String: Float]) -> [String: Float] {
+        var values: [String: [Float]] = reference.mapValues { [$0] }
+        for score in scores where score.finishable {
+            for (name, value) in score.selfieReadings { values[name, default: []].append(value) }
+        }
+        var usual: [String: Float] = [:]
+        for (name, list) in values where !list.isEmpty {
+            let sorted = list.sorted()
+            usual[name] = sorted.count % 2 == 1 ? sorted[sorted.count / 2] : (sorted[sorted.count / 2 - 1] + sorted[sorted.count / 2]) / 2
+        }
+        return usual
+    }
+
+    /// The score once the person's usual readings are known: the signals read
+    /// against them join their groups, the gates read against them apply, and
+    /// the value and tier are worked out again. A photo that is not
+    /// `finishable` comes back unchanged.
+    func finished(usual: [String: Float]) -> MuseScore {
+        guard finishable else { return self }
+        let finished = self
+        // Signals and gates read against `usual` are added here.
+        _ = usual
+        return finished.settled()
+    }
+
+    /// Value, parts, tier and reasons from `signals` and `filter`, by the rule
+    /// the v2 selfie score uses in `init`: each group its lowest signal, a
+    /// weighted geometric mean, Tier A at `tierALine` unless the eyes are under
+    /// `tierAEyeSpacingMin` apart.
+    func settled() -> MuseScore {
+        typealias V = ViewController
+        var settled = self
+        var reasons: [String] = []
+        let groups: [Float] = V.scoreWeightsV2.map { weight in
+            guard let low = (signals[weight.name] ?? []).min(by: { $0.value < $1.value }) else { return 1 }
+            if low.value < 1 { reasons.append(low.why) }
+            return low.value
+        }
+        let t = zip(V.scoreWeightsV2, groups).reduce(Float(1)) { $0 * pow($1.1, $1.0.weight) }
+        settled.parts = zip(V.scoreWeightsV2, groups).map { ($0.name, $1) }
+        settled.value = filter == nil ? t : 0
+        let eyesTooSmall = (eyeSpacing ?? .infinity) < V.tierAEyeSpacingMin
+        let eyesWhy = String(format: "eyes %.0f px apart", eyeSpacing ?? 0)
+        if eyesTooSmall, !reasons.contains(eyesWhy) { reasons.append(eyesWhy) }
+        settled.tier = filter == nil ? (t >= V.tierALine && !eyesTooSmall ? "A" : "B") : nil
+        settled.reasons = reasons
+        return settled
+    }
+
+    /// One signal read against its curve, added to `group` with its working, as
+    /// the v2 score writes them — see `signalHows`.
+    mutating func addRamped(_ group: String, _ why: String, _ reading: Float, _ curve: (good: Float, bad: Float)) {
+        let value = max(0, min(1, (reading - curve.bad) / (curve.good - curve.bad)))
+        let n = { (x: Float) in String(format: "%g", (Double(x) * 100).rounded() / 100) }
+        let (good, bad) = curve
+        signalHows[why] = value >= 1 ? "\(n(reading)) is \(good > bad ? "at or above" : "within") \(n(good)): full marks"
+            : value <= 0 ? "\(n(reading)) is \(good > bad ? "at or below" : "at or past") \(n(bad)): zero"
+            : good > bad ? "(\(n(reading)) − \(n(bad))) ÷ (\(n(good)) − \(n(bad))) = \(String(format: "%.2f", value))"
+            : "(\(n(bad)) − \(n(reading))) ÷ (\(n(bad)) − \(n(good))) = \(String(format: "%.2f", value))"
+        signals[group, default: []].append((why, value))
+    }
+
+    /// A gate decided at the end of the scan: the photo is ruled out by `name`.
+    mutating func gate(_ name: String) {
+        if filter == nil { filter = name }
     }
 
     /// For the console: the value, then every part, or the filter that zeroed it.
@@ -5098,6 +5247,7 @@ extension ViewController {
         lastReferenceIndex = 0
         lastReferenceQuality = nil
         referenceEmbedding = nil
+        referenceReadings = [:]
         isLimitedAccess = false
         debugCropsSaved = 0
         // Cleared with the reference face: every verdict here was reached against it.
@@ -5496,6 +5646,20 @@ extension ViewController {
     }
 
     /// The largest face Vision finds, or nil.
+    /// The readings a library selfie keeps for `MuseScore.finished(usual:)`, from
+    /// the reference selfie: the same score, run on it — see `selfieUsualEnabled`.
+    func readings(ofReference image: CGImage) -> [String: Float] {
+        guard let face = largestFace(in: image, orientation: .up) else { return [:] }
+        let handler = VNImageRequestHandler(cgImage: image, orientation: .up, options: [:])
+        let context = museContext(face: face, in: image, handler: handler, readCover: Self.coverReadEnabled)
+        let gates = MuseScore.SelfieGates(eyeSpacingOriginal: Self.eyeSpacing(of: face, in: image, handler: handler).map { Float($0) },
+                                          originalScale: 1, originalLongSide: Float(max(image.width, image.height)), camera: nil)
+        let score = MuseScore(face: face, in: image, handler: handler, faceWidth: face.boundingBox.width * CGFloat(image.width),
+                              expression: context.expression, labels: context.labels, handOnFace: context.handOnFace,
+                              outfit: context.outfit, selfie: true, gates: gates, coverReader: context.coverReader)
+        return score.selfieReadings
+    }
+
     func largestFace(in cgImage: CGImage, orientation: CGImagePropertyOrientation) -> VNFaceObservation? {
         let request = VNDetectFaceRectanglesRequest()
         try? VNImageRequestHandler(cgImage: cgImage, orientation: orientation, options: [:]).perform([request])
