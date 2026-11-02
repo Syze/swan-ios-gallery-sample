@@ -1246,6 +1246,12 @@ extension ViewController {
     /// read the same way and joins the median, so there is no minimum count.
     /// Off: selfies stream with their score as found.
     static let selfieUsualEnabled = true
+    /// Each repeated shot counts once in the person's usual (2 Nov 2026): of a
+    /// group of selfies that repeat one shot (`duplicateDistance`), only the
+    /// first in scan order is a sample of the median, so a burst of one moment
+    /// cannot pull the usual towards itself. Every photo of the group is still
+    /// finished against it. Off: every finished selfie is a sample.
+    static let usualOnePerShot = true
 
     /// The v2 selfie score — GALLERY_PICK_V2_PLAN.md, item 3. On, a selfie
     /// that passed the gates scores T, 0 to 1: six groups, each the lowest of
@@ -2839,7 +2845,15 @@ extension ViewController {
             // the next scan's usual may differ.
             var usualDropped: [String] = []
             if Self.selfieUsualEnabled, !selfieHeld.isEmpty {
-                let usual = MuseScore.usual(of: selfieHeld.values.map(\.score), reference: self?.referenceReadings ?? [:])
+                // One sample per repeated shot — see `usualOnePerShot`. `matchedIds`
+                // is in scan order, so the first of each group is the one kept.
+                var shots = Set<String>()
+                let samples = matchedIds.compactMap { id -> MuseScore? in
+                    guard let held = selfieHeld[id] else { return nil }
+                    if Self.usualOnePerShot, !shots.insert(dupGroups[id] ?? id).inserted { return nil }
+                    return held.score
+                }
+                let usual = MuseScore.usual(of: samples, reference: self?.referenceReadings ?? [:])
                 for (id, held) in selfieHeld where matchedIds.contains(id) {
                     let finished = held.score.finished(usual: usual)
                     if let why = finished.filter {
@@ -2862,7 +2876,7 @@ extension ViewController {
                 }
                 if Self.verboseLogging {
                     let line = usual.sorted { $0.key < $1.key }.map { String(format: "%@ %.3f", $0.key, $0.value) }.joined(separator: ", ")
-                    print("  \u{1f9ee} usual over \(selfieHeld.count) selfie(s) and the reference: \(line.isEmpty ? "no readings" : line) — withdrew \(usualDropped.count)")
+                    print("  \u{1f9ee} usual over \(samples.count) of \(selfieHeld.count) selfie(s) and the reference: \(line.isEmpty ? "no readings" : line) — withdrew \(usualDropped.count)")
                 }
             }
 
