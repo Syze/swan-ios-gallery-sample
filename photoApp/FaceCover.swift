@@ -30,7 +30,12 @@ struct FaceCover {
     let face: Float
     /// Share of the hairline band that is hair or skin: a bare head reads high.
     let bare: Float
-    let ms: Int
+    var ms: Int
+    /// Light across the face, read on its skin pixels only (no hair, glasses
+    /// frames or background): the median brightness of the brighter side over
+    /// the darker side, split on the face's own midline (brow centre to chin).
+    /// Nil without landmarks or with too little skin on either side.
+    var skinSideRatio: Float? = nil
 
     static let modelName = "selfie_multiclass_256x256"
     /// The crop's longer side is brought down to this before the model, which
@@ -69,11 +74,14 @@ struct FaceCover {
 
     var note: String {
         String(format: "cover hairline %.2f jaw %.2f face %.2f bare %.2f (%dms)", hairline, jaw, face, bare, ms)
+            + (skinSideRatio.map { String(format: "; skin sides %.2f×", $0) } ?? "")
     }
 
     /// Reads the head crop. `face` is Vision's face box inside the crop, in the
-    /// crop's pixels with the origin at the top left.
-    static func read(headCrop: CGImage, face: CGRect) -> FaceCover? {
+    /// crop's pixels with the origin at the top left; `landmarks` are the face
+    /// landmarker's points on the same crop, 0–1 (`FaceExpression.landmarks`),
+    /// for the readings that need the face's geometry.
+    static func read(headCrop: CGImage, face: CGRect, landmarks: [CGPoint]? = nil) -> FaceCover? {
         guard let segmenter else { return nil }
         let started = Date()
         let small = downscaled(headCrop) ?? headCrop
@@ -120,11 +128,57 @@ struct FaceCover {
         let hairlineBand = CGRect(x: box.minX, y: box.minY - 0.25 * h, width: box.width, height: 0.4 * h)
         let jawBand = CGRect(x: box.minX + 0.1 * box.width, y: box.maxY - 0.25 * h, width: box.width * 0.8, height: 0.23 * h)
         let oval = box.insetBy(dx: box.width * 0.1, dy: h * 0.05)
-        return FaceCover(hairline: share(hairlineBand, counting: covered),
-                         jaw: share(jawBand, counting: covered),
-                         face: share(oval, oval: true, counting: notFace),
-                         bare: share(hairlineBand, counting: bareSkin),
-                         ms: Int(Date().timeIntervalSince(started) * 1000))
+        var cover = FaceCover(hairline: share(hairlineBand, counting: covered),
+                              jaw: share(jawBand, counting: covered),
+                              face: share(oval, oval: true, counting: notFace),
+                              bare: share(hairlineBand, counting: bareSkin),
+                              ms: 0)
+        if let landmarks, landmarks.count >= 468, let pixels = rgba(small) {
+            cover.readSkin(mask: data, width: mw, height: mh, pixels: pixels, imageWidth: small.width,
+                           imageHeight: small.height, landmarks: landmarks)
+        }
+        cover.ms = Int(Date().timeIntervalSince(started) * 1000)
+        return cover
+    }
+
+    /// The readings on the face's skin pixels. `mask` is the segmenter's class
+    /// per pixel, `pixels` the RGBA of the image it read, `landmarks` 0–1 on it.
+    private mutating func readSkin(mask: UnsafePointer<UInt8>, width mw: Int, height mh: Int, pixels: [UInt8],
+                                   imageWidth: Int, imageHeight: Int, landmarks: [CGPoint]) {
+        let sx = Float(mw) / Float(imageWidth), sy = Float(mh) / Float(imageHeight)
+        // The midline, brow centre (9) to chin (152), in the mask's pixels.
+        let top = (x: Float(landmarks[9].x) * Float(mw), y: Float(landmarks[9].y) * Float(mh))
+        let chin = (x: Float(landmarks[152].x) * Float(mw), y: Float(landmarks[152].y) * Float(mh))
+        let dx = chin.x - top.x, dy = chin.y - top.y
+        var sideA: [Float] = [], sideB: [Float] = []
+        for y in 0..<mh {
+            for x in 0..<mw where mask[y * mw + x] == Class.faceSkin.rawValue {
+                let px = min(imageWidth - 1, Int(Float(x) / sx)), py = min(imageHeight - 1, Int(Float(y) / sy))
+                let i = (py * imageWidth + px) * 4
+                let r = Float(pixels[i]) / 255, g = Float(pixels[i + 1]) / 255, b = Float(pixels[i + 2]) / 255
+                let luma = 0.299 * r + 0.587 * g + 0.114 * b
+                if (Float(x) - top.x) * dy - (Float(y) - top.y) * dx > 0 { sideA.append(luma) } else { sideB.append(luma) }
+            }
+        }
+        if sideA.count > 50, sideB.count > 50 {
+            let a = Self.median(sideA), b = Self.median(sideB)
+            skinSideRatio = max(a, b) / max(min(a, b), 0.01)
+        }
+    }
+
+    private static func median(_ values: [Float]) -> Float {
+        let sorted = values.sorted()
+        return sorted.count % 2 == 1 ? sorted[sorted.count / 2] : (sorted[sorted.count / 2 - 1] + sorted[sorted.count / 2]) / 2
+    }
+
+    /// The image's pixels as RGBA bytes, row by row from the top.
+    private static func rgba(_ image: CGImage) -> [UInt8]? {
+        let w = image.width, h = image.height
+        guard let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
+                                  space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else { return nil }
+        ctx.draw(image, in: CGRect(x: 0, y: 0, width: w, height: h))
+        guard let data = ctx.data else { return nil }
+        return Array(UnsafeBufferPointer(start: data.bindMemory(to: UInt8.self, capacity: w * h * 4), count: w * h * 4))
     }
 
     /// The crop with its longer side at `inputPixels`, or nil when it is

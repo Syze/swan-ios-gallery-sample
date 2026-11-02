@@ -69,6 +69,11 @@ struct FaceExpression {
     /// One pair measured 30 Oct 2026: a selfie shot from below 0.72, one at eye
     /// level 0.83. Nil without landmarks.
     let faceRatio: Float?
+    /// Fine detail on the face itself: the Laplacian variance of the box the
+    /// face's points span, drawn grey at 256 × 256, × 1000. Compared with the
+    /// shopper's other selfies for the relative blur gate — see
+    /// `ViewController.relativeBlurGateEnabled`. Nil without landmarks.
+    let faceDetail: Float?
     /// The head's angle to the camera from the landmarker's face transform, in
     /// degrees, signed; pitch is positive when the camera looks up at the face.
     /// The pitch is what the v2 selfie gate and pose group read — see
@@ -77,6 +82,15 @@ struct FaceExpression {
     let headPitch: Float?
     let headYaw: Float?
     let headRoll: Float?
+    /// How open the eyes are: the gap between the lids (159–145, 386–374) over
+    /// the iris's width, the narrower eye of the two. A squint or a look down
+    /// narrows the gap while the iris keeps its size. Logged only, until a
+    /// line is set. Nil without iris points.
+    let lidGap: Float?
+    /// The landmarker's points in the head crop, 0–1 with the origin at the top
+    /// left, for readers of the same crop that need the face's geometry — see
+    /// `FaceCover.read`. Empty without landmarks.
+    let landmarks: [CGPoint]
     let ms: Int
 
     /// The more open eye: a wink leaves one eye open and scores low here while
@@ -117,6 +131,30 @@ struct FaceExpression {
 
     static var isAvailable: Bool { landmarker != nil }
 
+    /// The Laplacian variance of an image drawn grey at `side` × `side`, × 1000:
+    /// how much fine detail it holds. Motion blur and missed focus take it down.
+    static func laplacianVariance(_ image: CGImage, side: Int = 256) -> Float? {
+        var pixels = [UInt8](repeating: 0, count: side * side)
+        let drawn = pixels.withUnsafeMutableBytes { raw -> Bool in
+            guard let context = CGContext(data: raw.baseAddress, width: side, height: side, bitsPerComponent: 8, bytesPerRow: side,
+                                          space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGImageAlphaInfo.none.rawValue) else { return false }
+            context.interpolationQuality = .medium
+            context.draw(image, in: CGRect(x: 0, y: 0, width: side, height: side))
+            return true
+        }
+        guard drawn else { return nil }
+        var sum = 0.0, sumSquares = 0.0, count = 0.0
+        for y in 1..<(side - 1) {
+            for x in 1..<(side - 1) {
+                let i = y * side + x
+                let v = (4 * Double(pixels[i]) - Double(pixels[i - 1]) - Double(pixels[i + 1]) - Double(pixels[i - side]) - Double(pixels[i + side])) / 255
+                sum += v; sumSquares += v * v; count += 1
+            }
+        }
+        let mean = sum / count
+        return Float((sumSquares / count - mean * mean) * 1000)
+    }
+
     /// Loads the model now rather than on the first match, so the first match
     /// line is not a second late. Called when the reference face is ready.
     static func warmUp() {
@@ -144,6 +182,8 @@ struct FaceExpression {
         var irisPixels: Float?
         var faceRatio: Float?
         var eyeYaw: Float?, eyePitch: Float?
+        var faceDetail: Float?
+        var lidGap: Float?
         if let points = result.faceLandmarks.first, points.count >= 478 {
             let w = Float(headCrop.width), h = Float(headCrop.height)
             func across(_ a: Int, _ b: Int) -> Float {
@@ -172,6 +212,14 @@ struct FaceExpression {
             if !eyes.isEmpty {
                 eyeYaw = eyes.map(\.yaw).reduce(0, +) / Float(eyes.count)
                 eyePitch = eyes.map(\.pitch).reduce(0, +) / Float(eyes.count)
+            }
+            let gaps = [(across(159, 145), across(469, 471)), (across(386, 374), across(474, 476))]
+                .compactMap { $0.1 > 0 ? $0.0 / $0.1 : nil }
+            lidGap = gaps.min()
+            let xs = points.map { $0.x * w }, ys = points.map { $0.y * h }
+            if let x0 = xs.min(), let x1 = xs.max(), let y0 = ys.min(), let y1 = ys.max(), x1 > x0, y1 > y0,
+               let face = headCrop.cropping(to: CGRect(x: CGFloat(x0), y: CGFloat(y0), width: CGFloat(x1 - x0), height: CGFloat(y1 - y0)).integral) {
+                faceDetail = laplacianVariance(face)
             }
         }
         // Euler angles from the transform's rotation part, as MediaPipe's own
@@ -206,9 +254,12 @@ struct FaceExpression {
             press: (value("mouthPressLeft") + value("mouthPressRight")) / 2,
             browDown: (value("browDownLeft") + value("browDownRight")) / 2,
             faceRatio: faceRatio,
+            faceDetail: faceDetail,
             headPitch: headPitch,
             headYaw: headYaw,
             headRoll: headRoll,
+            lidGap: lidGap,
+            landmarks: (result.faceLandmarks.first ?? []).map { CGPoint(x: CGFloat($0.x), y: CGFloat($0.y)) },
             ms: Int(Date().timeIntervalSince(started) * 1000))
     }
 }

@@ -20,6 +20,35 @@ onwards; those entries are kept for reference and need nothing on your side.
 
 ---
 
+## [1.3.10] — 2026-11-02
+
+**Mobile iOS only.** **Controller: update recommended.** The update replaces
+`ViewController.swift`, `FaceExpression.swift` and `FaceCover.swift`. Older
+controllers keep working with this page.
+
+### Changed
+
+- **A rescored selfie replaces its first values.** A selfie sent a second
+  time with `rescored: true` (scored again from the shopper's own gaze
+  resting point, see 1.3.9) now replaces the first values in the grid, the
+  score sheet and the pre-selection. The 1.3.9 page kept the first ones.
+- **"Blurred against usual" compares close selfies only.** Only selfies with
+  the camera within 60 cm (`relativeBlurMaxCm`) take part: a face from a
+  metre or more away holds less fine detail however sharp it is. On a phone
+  scan, sharp photos from 1 to 3 m read 0.06× to 0.23× of the usual and
+  were withdrawn. Those keep the absolute blur filter. The shaken selfie is
+  still withdrawn.
+
+### Added
+
+- **`summary.blurBaseline`**, the shopper's usual fine detail the blur gate
+  compared with.
+- **The test scan report gains `droppedPhotos`** (`scanReportURL`, off in
+  the shared sample): each withdrawn match with its readings, why it went
+  and its reading against the line.
+
+---
+
 ## [1.3.9] — 2026-11-02
 
 **Mobile iOS only.** **Controller: update recommended.** The selfie ranking
@@ -51,10 +80,97 @@ pieces.
   level +2.3° and +14.2°, below with the eyes looking down at the phone
   +1.2°. `scoreInputs` reports the angles to two decimals. A head tipped down
   toward a low phone reads level or above and is not caught.
+- **Gaze is scored.** Behind `gazeCurve` (4° to 12°) and `gazeRest` in the
+  controller. The gaze group was 1 for every selfie; it now reads how far
+  the eyes point from where they sit when looking at the screen. Set on a
+  labelled set of 14 selfies: the screen and the lens read 2° apart (both
+  full marks), small looks to a side, up or down 1° to 6°, looks far to a
+  side 16° to 21° (zero). A selfie with gaze 0 scores 0, like any group at
+  0. A head turned with the eyes back on the lens counts as looking at the
+  lens (`gazeHeadShare`, 0.37 of the head's turn): four labelled selfies,
+  head turned 28° to 37°, all read within 4°. The resting point is the
+  shopper's own (`gazeRestFromSelfie`): where the eyes sat in the selfie
+  taken at the start of the flow, looking at their own screen on their own
+  phone, so eye shape and the lens-to-screen gap of each phone are allowed
+  for. Within 6° of the default on each axis (`gazeRestMaxShift`), else the
+  default 0° / −7.5°. `scoreInputs` gains `gazeRestYaw` and `gazeRestPitch`,
+  the point each selfie was measured from. The resting point is the
+  shopper's own (`gazeRestFromLibrary`): when the scan ends, the middle of
+  the eye readings of their selfies (5 or more, within 6° of the default),
+  and each selfie's gaze is measured again from it. The selfies whose score
+  changed are sent again with `rescored: true` before the pre-selection, and
+  the page takes the new values (from 1.3.10; the 1.3.9 page keeps the first
+  ones). On a second tester's library the eyes rest
+  2° lower and turned 1.5° to a side: 12 selfies scored again, four gaining
+  2–3 percent, one moving from Tier B to Tier A; the pick did not change.
+  The looking-away gates are decided during the scan, from the default.
+  Taking the resting point from the start-of-flow selfie instead
+  (`gazeRestFromSelfie`) is in the controller and off: that selfie is taken
+  in the page's camera, where the eyes rest about 3° away from Camera-app
+  selfies.
+- **Selfies looking off the camera are ruled out.** Behind
+  `lookingAwayGateEnabled`: eyes 12° or more off in any direction ("looking
+  away"), 5° or more up ("looking up"), 9° or more down ("looking down"). The
+  spec only scores gaze; a selfie with the eyes far off scored 0 and stayed
+  in the grid. On the labelled library: everyday selfies within 1.4° up or
+  down and 3° sideways; the far looks and side glances are ruled out.
+- **Selfies shot from far below or above, and blurred selfies, are ruled
+  out.** "Camera below" (`cameraBelowGate`): MediaPipe's pitch +8° or more;
+  a selfie from a phone at the chest read +9.9°, everyday selfies on three
+  libraries up to +6.8°. "Camera above" (`cameraAboveGate`): the head tipped
+  back to a phone held high reads level, so the face's proportions (upper
+  face over lower, 1.10 or more) with Vision's pitch (12° or more) decide;
+  set on one example, everyday selfies up to 1.074. "Blurred against usual"
+  (`relativeBlurGateEnabled`): when the scan ends, a selfie whose face holds
+  under 45% of the shopper's usual fine detail is withdrawn through
+  `dropped`; a shaken selfie read 0.39 of the same person's sharp ones,
+  sharp selfies down to 0.51. `scoreInputs` gains `faceDetail`; `summary`
+  gains `blurDropped`.
+- **The selfie's roll comes from MediaPipe, with a gate at 30°.** Behind
+  `mediaPipeRollEnabled` (pose curve 2° to 30°) and `rollGateEnabled`
+  ("head tilted" at 30° or more: lying on a pillow, the head on a shoulder).
+  Vision's roll over-read level heads: one selfie read 11° in Vision and 1°
+  in MediaPipe, and its score rose from 0.74 to 0.82.
+- **Clear glasses no longer count twice in visibility.** The segmenter reads
+  the frames as covering part of the face, on top of the glasses cap; with
+  glasses on, `glassesOvalAllowance` (0.08) of the oval is allowed for, so
+  the cap (0.85) is what glasses cost.
+- `scoreInputs` gains `lidGap` (eye openness: the gap between the lids over
+  the iris's width, the narrower eye) and `skinSideRatio` (light evenness on
+  the face's skin pixels, split on its midline), logged only, to be decided.
+  `FaceCover.read` takes the face's landmarks for the second.
+- **The selfie head-tilt gate is 12°**, was the spec's 15° (`gatePitchDegrees`).
+  On the labelled library every selfie between 12° and 15° was a
+  camera-below or dark-room shot, all Tier B.
+- **The selfie taken at the start of the flow is checked like a library
+  selfie.** Behind `selfieCheckMediaPipe` in the controller, on. Its head
+  turn and tilt come from the MediaPipe face model instead of Vision's, which
+  over-read level selfies by 8° to 14°, with the same 15° limits; and eyes
+  12° or more off the screen (`selfieMaxGazeDegrees`, where the gaze score
+  reaches zero) send it back. Both use the page's existing
+  `selfie-not-frontal` message, "Look straight at the camera and try again",
+  so the page is unchanged. Without a MediaPipe reading, Vision's angles as
+  before.
 - **A frown caps expression at 0.6**, was 0.5 (`frownCap`), the value on the
   client's test sheets. The other expression caps stay at 0.5 and an open
   smile at 0.4. It moves only selfies whose sole expression cap is a frown,
   by about 3 percent of the score.
+- **Selfies with a hand near the face, a smaller wink, or a scarf or high
+  collar are ruled out.** "Hand near face" (`handNearFaceDrops`): a hand with
+  10 or more points anywhere in the padded face box grown 2.5 times
+  (`handNearFaceScale`) — a V sign, a wave, a hand on the chin or raised
+  above the head; the hand detector's crop widens from 1.8 to 3.5 face boxes
+  (`handsNearCropScale`) to see it. Selfies only. On four test selfies with a
+  hand all four went, twelve without stayed in. "One eye closed" also covers
+  a smaller wink (`unevenBlinkDrops`): one eye 0.35 or more closed and 0.2
+  more than the other (`unevenBlink`, `unevenBlinkGap`); both eyes half shut
+  together stay in. On 3,956 public faces the eye drops rise from 3.0% to
+  4.0%. "Scarf or high collar" (`scarfGateEnabled`): Vision's classifier calls
+  the head crop a scarf at 0.3 or more (`scarfConfidence`); a fleece collar
+  up over the jaw read 0.33–0.55, none of 31 test selfies reached it, hoodies
+  among them, and the hoodie label stays logged only. `scoreFilter` gains
+  `hand near face` and `scarf or high collar`; `scoreInputs` gains
+  `handNearFace`.
 
 ### Added
 
@@ -78,6 +194,18 @@ pieces.
   the head, in degrees, from the iris against the eye corners; yaw positive
   toward the image's right, pitch positive downward). The last six are
   logged only, for setting the gaze curve from labelled photos.
+- `scoreInputs` on a selfie gains `iso` and `exposureMs`, the camera's ISO
+  and shutter time from the photo's metadata, logged only. A dark-room
+  selfie's face reads as bright as a lit one, because the phone brightens
+  it; the ISO is what shows the low light.
+- **Low light counts in the light group.** Behind `lowLightISO` in the
+  controller: full marks up to ISO 1600, zero at 5000. On an iPhone 12
+  everyday selfies read ISO 320–800 and the dark-room selfies 1600 to 4000;
+  on an iPhone 13 Pro everyday indoor selfies read 1000–1250. ISO scales differ between camera sensors, so the line is to be
+  checked on other phones.
+- **Selfies at ISO 2500 and over are ruled out**, "too dark" (`tooDarkISO`).
+  The dark-room selfies (ISO 3200, 4000) go; one a little dark (1600) stays
+  in at a lower score.
 
 ---
 
