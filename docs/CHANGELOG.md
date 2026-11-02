@@ -20,6 +20,43 @@ onwards; those entries are kept for reference and need nothing on your side.
 
 ---
 
+## [1.3.12] — 2026-11-03
+
+**Mobile iOS only.** The npm package is unchanged. **Controller: no update
+needed.** Page change only.
+
+### Changed
+
+- **The picker shows selfies and the picked fronts and sides only.** Every
+  selfie is in the grid; a front or side only while it is selected: the
+  scan's pre-selection, made when the scan ends, and photos taken with the
+  camera. Until the scan ends the grid holds selfies only. A front or side
+  the scan could not find is taken with the camera. Photos with no type yet
+  (older controllers) are still shown. Behind `SHOW_ONLY_SELFIES_AND_PICKS`.
+
+---
+
+## [1.3.11] — 2026-11-03
+
+**Mobile iOS only.** The npm package is unchanged. **Controller: no update
+needed.** Page changes only.
+
+### Changed
+
+- **Only a missing type can be picked.** With a selfie put down, only
+  selfies stay tappable in the picker; the same for front and side. Before,
+  any photo could fill the gap, so a third front could replace a side. A
+  photo whose type an older controller sends only after the tap is put back
+  down with "You already have enough {type} photos." when that type is full,
+  and analytics records `photo_type_full`. The camera top-up and the
+  pre-selection are unchanged. Behind `PICK_ONLY_MISSING_TYPE`.
+- **The grid tiles no longer show the score, the photo id or the ⓘ.**
+  `SHOW_SCORE_BADGE`, `SHOW_ID_BADGE` and `SHOW_SCORE_DETAILS` in
+  `galleryConstants.ts` are now false; the code stays, and setting them back
+  to true brings the review view back.
+
+---
+
 ## [1.3.10] — 2026-11-02
 
 **Mobile iOS only.** **Controller: update recommended.** The update replaces
@@ -38,17 +75,6 @@ controllers keep working with this page.
   scan, sharp photos from 1 to 3 m read 0.06× to 0.23× of the usual and
   were withdrawn. Those keep the absolute blur filter. The shaken selfie is
   still withdrawn.
-- **Only a missing type can be picked.** With a selfie put down, only
-  selfies stay tappable in the picker; the same for front and side. Before,
-  any photo could fill the gap, so a third front could replace a side. A
-  photo whose type an older controller sends only after the tap is put back
-  down with "You already have enough {type} photos." when that type is full,
-  and analytics records `photo_type_full`. The camera top-up and the
-  pre-selection are unchanged. Behind `PICK_ONLY_MISSING_TYPE`.
-- **The grid tiles no longer show the score, the photo id or the ⓘ.**
-  `SHOW_SCORE_BADGE`, `SHOW_ID_BADGE` and `SHOW_SCORE_DETAILS` in
-  `galleryConstants.ts` are now false; the code stays, and setting them back
-  to true brings the review view back.
 
 ### Added
 

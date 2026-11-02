@@ -15,7 +15,7 @@ final class ViewController: UIViewController {
 
     /// Where the SDK bundle is served from. Must be **https** — getUserMedia needs
     /// a secure context, so an http or file:// URL gives no camera.
-    let sdkURL = URL(string: "https://swan-mobile-web-component.swan.so/v1.3.11/index.html")!
+    let sdkURL = URL(string: "https://swan-mobile-web-component.swan.so/v1.3.12/index.html")!
 
     static let bridgeName = "swanBridge"
 
