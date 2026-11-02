@@ -1411,6 +1411,14 @@ extension ViewController {
     /// gaze group scores 1, as before.
     static let irisGazeEnabled = true
     static let irisGaze: (good: Float, bad: Float) = (0.03, 0.30)
+    /// Eye openness against the person's usual (2 Nov 2026):
+    /// `FaceExpression.lidGap`, the lids' gap over the iris's width, as a share
+    /// of the person's median — see `selfieUsualEnabled`. An expression signal:
+    /// full marks at the usual, zero at half of it (`lidGapOpenness`). Natural
+    /// eye shape differs, so a fixed line would mark some people's open eyes as
+    /// narrowed. Off: openness is not scored, only gated.
+    static let lidGapEnabled = true
+    static let lidGapOpenness: (good: Float, bad: Float) = (1.0, 0.5)
     static let lightBacklight: (good: Float, bad: Float) = (0.8, 0.4)
     static let lightClipped: (good: Float, bad: Float) = (0.01, 0.05)
     /// Expression: each of these caps the group. A closed smile, eyes held
@@ -3688,6 +3696,9 @@ struct MuseScore {
         }
         // A covered jaw moves the chin the face ratio reads; the jaw gate rules
         // such a selfie out anyway, and the reference selfie is not gated.
+        if gates != nil, ViewController.lidGapEnabled, let gap = expression?.lidGap {
+            selfieReadings["lidGap"] = gap
+        }
         if gates != nil, ViewController.irisGazeEnabled, let along = expression?.irisAlong, let across = expression?.irisAcross {
             selfieReadings["irisAlong"] = along
             selfieReadings["irisAcross"] = across
@@ -3755,6 +3766,7 @@ struct MuseScore {
             if let p = e.eyePitch { readings["eyePitch"] = fixed(p, 2) }
             if let a = e.irisAlong { readings["irisAlong"] = fixed(a, 3) }
             if let a = e.irisAcross { readings["irisAcross"] = fixed(a, 3) }
+            if let gap = e.lidGap { readings["lidGap"] = fixed(gap, 3) }
             if let ratio = e.faceRatio { readings["faceRatio"] = fixed(ratio, 3) }
             // Two decimals: the camera-below line sits at a whole or half
             // degree, and one decimal hid which side a reading fell on.
@@ -4010,6 +4022,9 @@ struct MuseScore {
         if V.irisGazeEnabled, let along = difference("irisAlong"), let across = difference("irisAcross") {
             let off = hypot(along, across)
             finished.addRamped("gaze", String(format: "gaze %.2f off the usual", off), off, V.irisGaze)
+        }
+        if V.lidGapEnabled, let open = relative("lidGap") {
+            finished.addRamped("expression", String(format: "eyes %.2f× as open as usual", open), open, V.lidGapOpenness)
         }
         if V.cameraHeightFromFaceRatio, let ratio = relative("faceRatio") {
             finished.addRamped("pose", String(format: "camera height %.2f× usual", ratio), ratio, V.cameraHeightRatio)

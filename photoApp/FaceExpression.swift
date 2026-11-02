@@ -84,6 +84,10 @@ struct FaceExpression {
     /// usual — see `ViewController.irisGazeEnabled`. Nil without iris points.
     let irisAlong: Float?
     let irisAcross: Float?
+    /// How open the eyes are: the gap between the lids (159–145, 386–374) over
+    /// the iris's width, the narrower eye of the two. A squint or a look down
+    /// narrows the gap while the iris keeps its size. Nil without iris points.
+    let lidGap: Float?
     /// The landmarker's points in the head crop, 0–1 with the origin at the top
     /// left, for readers of the same crop that need the face's geometry — see
     /// `FaceCover.read`. Empty without landmarks.
@@ -156,6 +160,7 @@ struct FaceExpression {
         var faceRatio: Float?
         var eyeYaw: Float?, eyePitch: Float?
         var irisAlong: Float?, irisAcross: Float?
+        var lidGap: Float?
         if let points = result.faceLandmarks.first, points.count >= 478 {
             let w = Float(headCrop.width), h = Float(headCrop.height)
             func across(_ a: Int, _ b: Int) -> Float {
@@ -198,6 +203,9 @@ struct FaceExpression {
                 let across = ((c.x - up.x) * (low.x - up.x) + (c.y - up.y) * (low.y - up.y)) / (span * span) - 0.5
                 return (along, across)
             }
+            let gaps = [(across(159, 145), across(469, 471)), (across(386, 374), across(474, 476))]
+                .compactMap { $0.1 > 0 ? $0.0 / $0.1 : nil }
+            lidGap = gaps.min()
             let irises = [irisIn(iris: 468, corners: (33, 133), lids: (159, 145)),
                           irisIn(iris: 473, corners: (263, 362), lids: (386, 374))].compactMap { $0 }
             if !irises.isEmpty {
@@ -242,6 +250,7 @@ struct FaceExpression {
             headRoll: headRoll,
             irisAlong: irisAlong,
             irisAcross: irisAcross,
+            lidGap: lidGap,
             landmarks: (result.faceLandmarks.first ?? []).map { CGPoint(x: CGFloat($0.x), y: CGFloat($0.y)) },
             ms: Int(Date().timeIntervalSince(started) * 1000))
     }
