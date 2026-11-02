@@ -1343,6 +1343,12 @@ extension ViewController {
     /// `poseRoll`, as before.
     static let mediaPipeRollEnabled = true
     static let mediaPipeRoll: (good: Float, bad: Float) = (2, 30)
+    /// A selfie with the head tilted to `gateRollDegrees` or more — lying on a
+    /// pillow, the head on a shoulder — is out ("head tilted") (2 Nov 2026), as
+    /// pitch and yaw are past their gates; the roll signal reaches zero there.
+    /// Reads the same roll as the pose group — see `mediaPipeRollEnabled`.
+    static let rollGateEnabled = true
+    static let gateRollDegrees: Float = 30
     /// A camera below the face: MediaPipe's pitch is positive when the camera
     /// looks up at the face. From `cameraBelowFrom` degrees the pose group is
     /// capped at `cameraBelowCap`. Measured 31 Oct 2026 on a labelled set:
@@ -3694,6 +3700,7 @@ struct MuseScore {
         if let gates {
             if selfiePitch > ViewController.gatePitchDegrees { filter = filter ?? "head pitched" }
             if yaw > ViewController.gateYawDegrees { filter = filter ?? "head turned" }
+            if ViewController.rollGateEnabled, selfieRoll >= ViewController.gateRollDegrees { filter = filter ?? "head tilted" }
             // The jaw gates every face; the teeth only one that is not smiling —
             // see `smileKeepsTeeth`.
             if let e = expression {
