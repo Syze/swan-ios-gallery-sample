@@ -1230,7 +1230,8 @@ extension ViewController {
     /// median over the scan's clean selfies, once `relativeBaselineMin` of them
     /// are in; decided at the end of the scan and withdrawn through `dropped`.
     /// The fixed closed-eye and wink gates still apply as the photo streams.
-    static let relativeEyeGateEnabled = true
+    /// Replaced by `lidGapEyeGateEnabled` when that is on.
+    static let relativeEyeGateEnabled = !lidGapEyeGateEnabled
     static let relativeOpenness: Float = 0.4
     static let relativeBaselineMin = 3
     /// Selfies judged against the person's own (2 Nov 2026). Several selfie
@@ -1419,6 +1420,14 @@ extension ViewController {
     /// narrowed. Off: openness is not scored, only gated.
     static let lidGapEnabled = true
     static let lidGapOpenness: (good: Float, bad: Float) = (1.0, 0.5)
+    /// The relative eye gate read on the lid gap (2 Nov 2026): a selfie whose
+    /// `FaceExpression.lidGap` is under `lidGapClosed` of the person's usual is
+    /// out ("eyes closed"), decided when the score is finished — see
+    /// `selfieUsualEnabled`. A heavy squint counts. It replaces the blink-based
+    /// gate at `relativeOpenness`: the blink reading barely moves on a squint.
+    /// The fixed closed-eye and wink gates still apply as the photo streams.
+    static let lidGapEyeGateEnabled = true
+    static let lidGapClosed: Float = 0.68
     static let lightBacklight: (good: Float, bad: Float) = (0.8, 0.4)
     static let lightClipped: (good: Float, bad: Float) = (0.01, 0.05)
     /// Expression: each of these caps the group. A closed smile, eyes held
@@ -3696,7 +3705,7 @@ struct MuseScore {
         }
         // A covered jaw moves the chin the face ratio reads; the jaw gate rules
         // such a selfie out anyway, and the reference selfie is not gated.
-        if gates != nil, ViewController.lidGapEnabled, let gap = expression?.lidGap {
+        if gates != nil, ViewController.lidGapEnabled || ViewController.lidGapEyeGateEnabled, let gap = expression?.lidGap {
             selfieReadings["lidGap"] = gap
         }
         if gates != nil, ViewController.irisGazeEnabled, let along = expression?.irisAlong, let across = expression?.irisAcross {
@@ -4023,7 +4032,9 @@ struct MuseScore {
             let off = hypot(along, across)
             finished.addRamped("gaze", String(format: "gaze %.2f off the usual", off), off, V.irisGaze)
         }
-        if V.lidGapEnabled, let open = relative("lidGap") {
+        let open = relative("lidGap")
+        if V.lidGapEyeGateEnabled, let open, open < V.lidGapClosed { finished.gate("eyes closed") }
+        if V.lidGapEnabled, let open {
             finished.addRamped("expression", String(format: "eyes %.2f× as open as usual", open), open, V.lidGapOpenness)
         }
         if V.cameraHeightFromFaceRatio, let ratio = relative("faceRatio") {
