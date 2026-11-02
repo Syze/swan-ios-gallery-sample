@@ -1474,6 +1474,15 @@ extension ViewController {
     /// 0.02, zero at 0.25 (`lensGlare`). Off: glasses cost the cap alone.
     static let lensGlareEnabled = true
     static let lensGlare: (good: Float, bad: Float) = (0.02, 0.25)
+    /// Glare on glasses as a gate (2 Nov 2026): with glasses on, a selfie whose
+    /// eyes are washed out — `FaceCover.eyeDarkest` at `fogLimit` times the
+    /// person's usual or more — is out ("glare on glasses"), decided when its
+    /// score is finished (see `selfieUsualEnabled`). Fogged or reflecting
+    /// lenses lift the pupils' darkness evenly, which the bright-spot share in
+    /// `lensGlare` does not see. Against the usual, since eye colour and the
+    /// light set the reading too.
+    static let fogGateEnabled = true
+    static let fogLimit: Float = 1.9
     static let glassesConfidence: Float = 0.5
     /// Detail: eye spacing in the original's pixels; sharpness keeps its 1.3.x
     /// reading.
@@ -3725,6 +3734,9 @@ struct MuseScore {
         }
         // A covered jaw moves the chin the face ratio reads; the jaw gate rules
         // such a selfie out anyway, and the reference selfie is not gated.
+        if gates != nil, ViewController.fogGateEnabled, let darkest = cover?.eyeDarkest {
+            selfieReadings["eyeDarkest"] = darkest
+        }
         if gates != nil, ViewController.browFurrowEnabled, let creases = expression?.furrow {
             selfieReadings["furrow"] = creases
         }
@@ -3820,6 +3832,7 @@ struct MuseScore {
             if let lightness = cover.skinL { readings["skinL"] = fixed(lightness, 2) }
             if let redness = cover.skinA { readings["skinA"] = fixed(redness, 2) }
             if let glare = cover.glare { readings["lensGlare"] = fixed(glare, 3) }
+            if let darkest = cover.eyeDarkest { readings["eyeDarkest"] = fixed(darkest, 3) }
             readings["coverHairline"] = fixed(cover.hairline, 2)
             readings["coverJaw"] = fixed(cover.jaw, 2)
             readings["coverFace"] = fixed(cover.face, 2)
@@ -4065,6 +4078,10 @@ struct MuseScore {
         if V.irisGazeEnabled, let along = difference("irisAlong"), let across = difference("irisAcross") {
             let off = hypot(along, across)
             finished.addRamped("gaze", String(format: "gaze %.2f off the usual", off), off, V.irisGaze)
+        }
+        if V.fogGateEnabled, (labels["eyeglasses"] ?? 0) >= V.glassesConfidence,
+           let washed = relative("eyeDarkest"), washed >= V.fogLimit {
+            finished.gate("glare on glasses")
         }
         if V.browFurrowEnabled, let creases = relative("furrow") {
             finished.addRamped("expression", String(format: "brow furrow %.2f× usual", creases), creases, V.browFurrow)

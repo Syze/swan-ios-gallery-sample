@@ -48,6 +48,11 @@ struct FaceCover {
     /// skin and nearly colourless — a reflection of a window or a screen — the
     /// larger of the two eyes. Read on the full-size crop.
     var glare: Float? = nil
+    /// How washed out the eyes are: the darkest pixels inside each eye's
+    /// opening (5th percentile of brightness, in an ellipse on the corners and
+    /// lids) over the skin's median, the lighter eye of the two. A clear eye
+    /// keeps a near-black pupil; fogged or reflecting lenses lift it.
+    var eyeDarkest: Float? = nil
 
     static let modelName = "selfie_multiclass_256x256"
     /// The crop's longer side is brought down to this before the model, which
@@ -198,8 +203,9 @@ struct FaceCover {
         guard let skin = skinMedian, landmarks.count >= 478 else { return }
         let cw = CGFloat(headCrop.width), ch = CGFloat(headCrop.height)
         func p(_ i: Int) -> CGPoint { CGPoint(x: landmarks[i].x * cw, y: landmarks[i].y * ch) }
-        let eyes: [(outer: Int, inner: Int, iris: Int, rim: (Int, Int))] = [(33, 133, 468, (469, 471)), (263, 362, 473, (474, 476))]
-        var glares: [Float] = []
+        let eyes: [(outer: Int, inner: Int, iris: Int, rim: (Int, Int), lids: (Int, Int))] =
+            [(33, 133, 468, (469, 471), (159, 145)), (263, 362, 473, (474, 476), (386, 374))]
+        var glares: [Float] = [], darkest: [Float] = []
         for eye in eyes {
             let outer = p(eye.outer), inner = p(eye.inner), iris = p(eye.iris)
             let width = hypot(inner.x - outer.x, inner.y - outer.y)
@@ -223,8 +229,33 @@ struct FaceCover {
                 }
             }
             if total >= 20 { glares.append(Float(bright) / Float(total)) }
+
+            // The opening: an ellipse along the corners, as tall as the lid gap.
+            let centre = CGPoint(x: (outer.x + inner.x) / 2, y: (outer.y + inner.y) / 2)
+            let ux = (inner.x - outer.x) / width, uy = (inner.y - outer.y) / width
+            let semiA = width / 2
+            let semiB = max(hypot(p(eye.lids.0).x - p(eye.lids.1).x, p(eye.lids.0).y - p(eye.lids.1).y) / 2, 0.12 * semiA)
+            let around = CGRect(x: centre.x - semiA, y: centre.y - semiA, width: 2 * semiA, height: 2 * semiA)
+                .intersection(CGRect(x: 0, y: 0, width: cw, height: ch)).integral
+            guard around.width >= 4, around.height >= 4, let opening = headCrop.cropping(to: around),
+                  let eyePixels = Self.rgba(opening) else { continue }
+            var lumas: [Float] = []
+            for y in 0..<opening.height {
+                for x in 0..<opening.width {
+                    let dx = around.minX + CGFloat(x) + 0.5 - centre.x, dy = around.minY + CGFloat(y) + 0.5 - centre.y
+                    let along = dx * ux + dy * uy, across = -dx * uy + dy * ux
+                    guard (along / semiA) * (along / semiA) + (across / semiB) * (across / semiB) <= 1 else { continue }
+                    let i = (y * opening.width + x) * 4
+                    lumas.append((0.299 * Float(eyePixels[i]) + 0.587 * Float(eyePixels[i + 1]) + 0.114 * Float(eyePixels[i + 2])) / 255)
+                }
+            }
+            if lumas.count >= 15 {
+                lumas.sort()
+                darkest.append(lumas[lumas.count * 5 / 100] / max(skin, 0.01))
+            }
         }
         glare = glares.max()
+        eyeDarkest = darkest.max()
     }
 
     /// sRGB, 0–1, to CIELAB under D65.
