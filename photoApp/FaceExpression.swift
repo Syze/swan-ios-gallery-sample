@@ -77,6 +77,13 @@ struct FaceExpression {
     let headPitch: Float?
     let headYaw: Float?
     let headRoll: Float?
+    /// Where the irises sit in the eyes, the mean of the two: along the line
+    /// between the eye's corners (`irisAlong`) and across it, from the upper lid
+    /// to the lower (`irisAcross`), each from -0.5 to 0.5 with 0 in the middle.
+    /// Eyes are not symmetric, so the score reads them against the person's
+    /// usual — see `ViewController.irisGazeEnabled`. Nil without iris points.
+    let irisAlong: Float?
+    let irisAcross: Float?
     /// The landmarker's points in the head crop, 0–1 with the origin at the top
     /// left, for readers of the same crop that need the face's geometry — see
     /// `FaceCover.read`. Empty without landmarks.
@@ -148,6 +155,7 @@ struct FaceExpression {
         var irisPixels: Float?
         var faceRatio: Float?
         var eyeYaw: Float?, eyePitch: Float?
+        var irisAlong: Float?, irisAcross: Float?
         if let points = result.faceLandmarks.first, points.count >= 478 {
             let w = Float(headCrop.width), h = Float(headCrop.height)
             func across(_ a: Int, _ b: Int) -> Float {
@@ -176,6 +184,25 @@ struct FaceExpression {
             if !eyes.isEmpty {
                 eyeYaw = eyes.map(\.yaw).reduce(0, +) / Float(eyes.count)
                 eyePitch = eyes.map(\.pitch).reduce(0, +) / Float(eyes.count)
+            }
+            // The iris centre within one eye: along its corners, left to right in
+            // the image, and across from the upper lid to the lower.
+            func irisIn(iris: Int, corners: (Int, Int), lids: (upper: Int, lower: Int)) -> (along: Float, across: Float)? {
+                func p(_ i: Int) -> (x: Float, y: Float) { (points[i].x * w, points[i].y * h) }
+                let a = p(corners.0), b = p(corners.1), c = p(iris), up = p(lids.upper), low = p(lids.lower)
+                let (left, right) = a.x <= b.x ? (a, b) : (b, a)
+                let length = hypot(right.x - left.x, right.y - left.y)
+                let span = hypot(low.x - up.x, low.y - up.y)
+                guard length > 0, span > 0 else { return nil }
+                let along = ((c.x - left.x) * (right.x - left.x) + (c.y - left.y) * (right.y - left.y)) / (length * length) - 0.5
+                let across = ((c.x - up.x) * (low.x - up.x) + (c.y - up.y) * (low.y - up.y)) / (span * span) - 0.5
+                return (along, across)
+            }
+            let irises = [irisIn(iris: 468, corners: (33, 133), lids: (159, 145)),
+                          irisIn(iris: 473, corners: (263, 362), lids: (386, 374))].compactMap { $0 }
+            if !irises.isEmpty {
+                irisAlong = irises.map(\.along).reduce(0, +) / Float(irises.count)
+                irisAcross = irises.map(\.across).reduce(0, +) / Float(irises.count)
             }
         }
         // Euler angles from the transform's rotation part, as MediaPipe's own
@@ -213,6 +240,8 @@ struct FaceExpression {
             headPitch: headPitch,
             headYaw: headYaw,
             headRoll: headRoll,
+            irisAlong: irisAlong,
+            irisAcross: irisAcross,
             landmarks: (result.faceLandmarks.first ?? []).map { CGPoint(x: CGFloat($0.x), y: CGFloat($0.y)) },
             ms: Int(Date().timeIntervalSince(started) * 1000))
     }

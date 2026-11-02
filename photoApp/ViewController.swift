@@ -1403,6 +1403,14 @@ extension ViewController {
     /// a segmenter reading: the order rule.
     static let skinCastEnabled = true
     static let skinCast: (good: Float, bad: Float) = (-1, 12)
+    /// Gaze from where the irises sit in the eyes (2 Nov 2026), against the
+    /// person's usual — see `selfieUsualEnabled`: `FaceExpression.irisAlong` and
+    /// `irisAcross`, and how far the pair is from the person's median. A look at
+    /// the screen or away moves the irises from where they sit when the person
+    /// looks at the lens. Full marks to 0.03, zero at 0.30 (`irisGaze`). Off: the
+    /// gaze group scores 1, as before.
+    static let irisGazeEnabled = true
+    static let irisGaze: (good: Float, bad: Float) = (0.03, 0.30)
     static let lightBacklight: (good: Float, bad: Float) = (0.8, 0.4)
     static let lightClipped: (good: Float, bad: Float) = (0.01, 0.05)
     /// Expression: each of these caps the group. A closed smile, eyes held
@@ -3680,6 +3688,10 @@ struct MuseScore {
         }
         // A covered jaw moves the chin the face ratio reads; the jaw gate rules
         // such a selfie out anyway, and the reference selfie is not gated.
+        if gates != nil, ViewController.irisGazeEnabled, let along = expression?.irisAlong, let across = expression?.irisAcross {
+            selfieReadings["irisAlong"] = along
+            selfieReadings["irisAcross"] = across
+        }
         if gates != nil, ViewController.skinCastEnabled, let redness = cover?.skinA {
             selfieReadings["skinA"] = redness
         }
@@ -3741,6 +3753,8 @@ struct MuseScore {
             // Logged only, for setting the gaze curve — see `FaceExpression.eyeYaw`.
             if let y = e.eyeYaw { readings["eyeYaw"] = fixed(y, 2) }
             if let p = e.eyePitch { readings["eyePitch"] = fixed(p, 2) }
+            if let a = e.irisAlong { readings["irisAlong"] = fixed(a, 3) }
+            if let a = e.irisAcross { readings["irisAcross"] = fixed(a, 3) }
             if let ratio = e.faceRatio { readings["faceRatio"] = fixed(ratio, 3) }
             // Two decimals: the camera-below line sits at a whole or half
             // degree, and one decimal hid which side a reading fell on.
@@ -3992,6 +4006,10 @@ struct MuseScore {
         }
         if V.skinCastEnabled, let redder = difference("skinA") {
             finished.addRamped("light", String(format: "colour cast: skin %+.1f a* against the usual", redder), redder, V.skinCast)
+        }
+        if V.irisGazeEnabled, let along = difference("irisAlong"), let across = difference("irisAcross") {
+            let off = hypot(along, across)
+            finished.addRamped("gaze", String(format: "gaze %.2f off the usual", off), off, V.irisGaze)
         }
         if V.cameraHeightFromFaceRatio, let ratio = relative("faceRatio") {
             finished.addRamped("pose", String(format: "camera height %.2f× usual", ratio), ratio, V.cameraHeightRatio)
