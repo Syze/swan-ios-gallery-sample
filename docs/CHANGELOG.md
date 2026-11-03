@@ -20,6 +20,26 @@ onwards; those entries are kept for reference and need nothing on your side.
 
 ---
 
+## [Unreleased]
+
+**Controller only; the page is unchanged.** The update replaces
+`ViewController.swift`.
+
+### Changed
+
+- **Selfies looking down are ruled out from 5°.** Behind
+  `lookingDownConfirmed`: the eyes 5° or more below their resting point,
+  with MediaPipe also reading them looking down (`gazeDown` 0.35 or more), is
+  "looking down", as 9° or more already was. Looking down drops the upper
+  lids over the iris, so the Muse gets the wrong eye shape. On two
+  libraries the selfies judged looking down read 5.2° to 7.7° with
+  `gazeDown` 0.38 to 0.63, and everyday selfies up to 4.3°. The second
+  reading spares eyes held wide, which read low by angle alone (7.8° and
+  5.4°) but 0.31 and 0.25 on `gazeDown`. Replayed on every saved scan, 94
+  selfies: the four judged looking down are removed, nothing else.
+
+---
+
 ## [1.3.12] — 2026-11-03
 
 **Mobile iOS only.** The npm package is unchanged. **Controller: no update

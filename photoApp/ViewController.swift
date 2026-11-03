@@ -1496,6 +1496,15 @@ extension ViewController {
     static let lookingAwayDegrees: Float = 12
     static let lookingUpDegrees: Float = 5
     static let lookingDownDegrees: Float = 9
+    /// Down from `degrees` when MediaPipe also reads the eyes looking down
+    /// (`gazeDown` at `mediaPipe` or more), "looking down" (agreed 3 Nov
+    /// 2026): the upper lids drop over the iris, so the Muse gets the wrong
+    /// eye shape. On two libraries the selfies judged looking down read 5.2°
+    /// to 7.7° from the default with `gazeDown` 0.38 to 0.63; everyday
+    /// selfies up to 4.3°. The second reading spares eyes held wide, which
+    /// read low by angle alone (7.8° and 5.4°) but 0.31 and 0.25 on
+    /// `gazeDown`. nil: only `lookingDownDegrees`.
+    static let lookingDownConfirmed: (degrees: Float, mediaPipe: Float)? = (5, 0.35)
 
     /// The resting point is the shopper's own: where their eyes sit in the
     /// selfie taken at the start of the flow, looking at their own screen on
@@ -3880,6 +3889,7 @@ struct MuseScore {
                     if hypot(o.side, o.vert) >= ViewController.lookingAwayDegrees { filter = filter ?? "looking away" }
                     else if o.vert <= -ViewController.lookingUpDegrees { filter = filter ?? "looking up" }
                     else if o.vert >= ViewController.lookingDownDegrees { filter = filter ?? "looking down" }
+                    else if let line = ViewController.lookingDownConfirmed, o.vert >= line.degrees, e.gazeDown >= line.mediaPipe { filter = filter ?? "looking down" }
                 }
             }
             // The face contour at the frame's edge: a chin or an ear the box's
