@@ -1,32 +1,31 @@
+// Swan sign-in: gets a session token for an email and keeps it in the Keychain.
+
 import UIKit
 import Security
 
-// Swan sign-in for the Gallery Pick reference host.
-//
-// A session token comes from the integration session endpoint, which takes the
-// publishable key, email and name.
-//
-// At launch `ViewController` shows `SwanSessionViewController`. With a saved
-// token that has more than a minute left it offers that email and a Continue
-// button, and a way to sign in with another email instead; otherwise it asks
-// for email and name. The page loads once there is a token.
+// MARK: - Settings
+// The key below is a placeholder for this sample. A real app should mint session
+// tokens on its own server and never ship an API key inside the app.
 
 enum SwanSessionConfig {
-    /// Where the token is minted. It must be the environment the web bundle talks
-    /// to (`API_BASE_URL` in the package), or every upload is refused.
-    static let sessionURL = URL(string: "https://swan-integration.swanvision.dev/api/session")!
-    static let publishableKey = "sw_pk_82ea4cb0719240c1a07c559eda5924a0"
+    /// Where the token is minted, per build (see `SwanEnvironment`).
+    static let sessionURL = SwanEnvironment.current.sessionURL
+    /// The sample's key for this build (see the note above).
+    static let publishableKey = SwanEnvironment.current.publishableKey
 
     /// A token this close to expiry counts as gone, so a scan does not start on a
     /// token that dies during the upload.
     static let expiryMargin: TimeInterval = 60
 }
 
+// MARK: - Session
+
+/// A signed-in session, saved in the Keychain on this phone.
 struct SwanSession: Codable {
     var email: String
     var name: String
     var token: String
-    /// What the API said, when it said anything. The token's own `exp` wins.
+    /// Expiry as the API reported it, if it did. The token's own `exp` wins.
     var expiresAt: Date?
 
     /// When the token stops working, or nil when neither the token nor the API
@@ -38,9 +37,8 @@ struct SwanSession: Codable {
         return expiresAt
     }
 
-    /// The email inside the token, when it carries one. The gallery runs for this
-    /// address: it is the one the API attributes uploads to. Session tokens carry
-    /// a plain `email`; older Auth0-issued ones used the namespaced claim.
+    /// The email inside the token, plain or namespaced claim. The gallery uses it,
+    /// because the API files uploads under this address.
     var tokenEmail: String? {
         let claims = SwanJWT.claims(token)
         return (claims?["email"] as? String) ?? (claims?["https://api.swanvision.ai/email"] as? String)
@@ -56,7 +54,7 @@ struct SwanSession: Codable {
         return saved
     }
 
-    // MARK: Keychain — one generic-password item, this device only.
+    // MARK: - Keychain (one item, this device only)
 
     private static let service = "co.getswan.gallery.session"
     private static let account = "session"
@@ -85,11 +83,9 @@ struct SwanSession: Codable {
               let data = out as? Data else { return nil }
         return try? JSONDecoder().decode(SwanSession.self, from: data)
     }
-
-    static func clear() {
-        SecItemDelete(query as CFDictionary)
-    }
 }
+
+// MARK: - Token
 
 /// Reads a JWT's payload without verifying it — the API verifies; this only
 /// decides whether to ask for a new one and which email the token is for.
@@ -115,6 +111,8 @@ enum SwanSessionError: LocalizedError {
         }
     }
 }
+
+// MARK: - Network
 
 enum SwanSessionClient {
     /// `POST` to the session endpoint → a token for this email. The name is
@@ -155,9 +153,10 @@ enum SwanSessionClient {
     }
 }
 
-/// Email and name, one button — or, with a live session, the email that is
-/// signed in and a Continue button, with the form one tap away for another
-/// email. Signing in again replaces the saved session.
+// MARK: - Sign-in screen
+
+/// Asks for email and name; with a live session, shows that email and a Continue
+/// button instead. Signing in again replaces the saved session.
 final class SwanSessionViewController: UIViewController, UITextFieldDelegate {
     var onSignedIn: ((SwanSession) -> Void)?
     /// The gallery page failed after a session existed. Reloads that page only.
@@ -200,16 +199,11 @@ final class SwanSessionViewController: UIViewController, UITextFieldDelegate {
         subtitle.textColor = .secondaryLabel
         subtitle.numberOfLines = 0
 
-        // The signed-in state: who, and one button.
+        // Signed-in view: the email and one button.
         signedInLabel.font = .preferredFont(forTextStyle: .headline)
         signedInLabel.numberOfLines = 0
 
-        var continueConfig = UIButton.Configuration.filled()
-        continueConfig.title = "Continue"
-        continueConfig.cornerStyle = .large
-        continueConfig.contentInsets = NSDirectionalEdgeInsets(top: 14, leading: 16, bottom: 14, trailing: 16)
-        continueButton.configuration = continueConfig
-        continueButton.addTarget(self, action: #selector(continueExisting), for: .touchUpInside)
+        setUpContinueButton(continueButton, action: #selector(continueExisting))
 
         var switchConfig = UIButton.Configuration.plain()
         switchConfig.title = "Use a different email"
@@ -238,16 +232,11 @@ final class SwanSessionViewController: UIViewController, UITextFieldDelegate {
         errorLabel.numberOfLines = 0
         errorLabel.isHidden = true
 
-        var config = UIButton.Configuration.filled()
-        config.title = "Continue"
-        config.cornerStyle = .large
-        config.contentInsets = NSDirectionalEdgeInsets(top: 14, leading: 16, bottom: 14, trailing: 16)
-        button.configuration = config
-        button.addTarget(self, action: #selector(submit), for: .touchUpInside)
+        setUpContinueButton(button, action: #selector(submit))
 
         spinner.hidesWhenStopped = true
 
-        // Which API this signs into, so nobody wonders which keys ran.
+        // Shows which server this signs in to.
         let footer = UILabel()
         footer.text = "Signs in to \(SwanSessionConfig.sessionURL.host ?? "Swan"). The session is kept on this phone until it expires."
         footer.font = .preferredFont(forTextStyle: .caption1)
@@ -278,13 +267,22 @@ final class SwanSessionViewController: UIViewController, UITextFieldDelegate {
         }
     }
 
+    /// Styles `button` as the screen's large filled "Continue" button and points it at `action`.
+    private func setUpContinueButton(_ button: UIButton, action: Selector) {
+        var config = UIButton.Configuration.filled()
+        config.title = "Continue"
+        config.cornerStyle = .large
+        config.contentInsets = NSDirectionalEdgeInsets(top: 14, leading: 16, bottom: 14, trailing: 16)
+        button.configuration = config
+        button.addTarget(self, action: action, for: .touchUpInside)
+    }
+
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         if existing == nil { emailField.becomeFirstResponder() }
     }
 
-    /// Session saved. Stays on this screen with the spinner until the gallery page is
-    /// ready; the web view is created only after this, so the email field never blocks.
+    /// Session saved: shows a spinner until the gallery page is ready. Main thread.
     func beginOpeningGallery() {
         pageFailed = false
         busy = true

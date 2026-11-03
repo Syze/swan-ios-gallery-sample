@@ -19,23 +19,47 @@ ones. Open it, add your keys, run it on a device.
    expression reader uses.
 2. Open **`photoApp.xcworkspace`**, not the `.xcodeproj`. The pod is linked only
    through the workspace.
-3. `photoApp/SwanSession.swift` ships with Swan's development keys in
-   `SwanSessionConfig`, so the sample runs as it is against the development
-   environment. Replace them with your own keys for your environment. In a
-   shipped app the session token comes from your own server and the keys
-   never ship; the sample mints it on the device to keep the setup short.
-4. In `photoApp/ViewController.swift`, check `sdkURL` points at the Swan page
-   for your environment, and set `shopDomain`, `userGender` and
-   `userHeightCm` for the shopper.
+3. `photoApp/SwanEnvironment.swift` holds what differs between a sandbox and
+   a production build: the Swan page URL, the session URL, the API key, and
+   whether each scan's report is posted (sandbox only). The sandbox values are
+   Swan's development environment, so the sample runs as it is; fill in the
+   production values for your account. In a shipped app the session token
+   comes from your own server and the key never ships; the sample mints it on
+   the device to keep the setup short.
+4. In `photoApp/ViewController.swift`, set `shopDomain` (a placeholder) to your
+   shop's id, and `userGender` and `userHeightCm` for the shopper.
 5. Under Signing & Capabilities, replace the development team and bundle
-   identifier with your own, pick your device, run. The project carries Swan's
+   identifier with your own, pick the `photoApp Sandbox` scheme and your device, run. The project carries Swan's
    team id and the bundle id `com.ios.swan`, which will not sign for you.
+
+### Sandbox and production builds
+
+The project has two build configurations and a scheme for each, so the same
+code makes both TestFlight builds:
+
+| Scheme | Environment | Scan report | Example build |
+|---|---|---|---|
+| `photoApp Sandbox` | sandbox | posted to Swan's scan ingest | 1.0 (32) |
+| `photoApp Production` | production | off | 1.0 (33) |
+
+Pick the scheme to run or archive; give each upload a new build number. Both
+builds are optimised. A Production build shows a warning until the production
+values in `SwanEnvironment.swift` are filled in.
 
 ## What is in here
 
 | Path | What it is |
 |---|---|
-| `photoApp/ViewController.swift` | The controller: hosts the page, scans, matches, ranks, uploads. The part to copy into your app. |
+| `photoApp/ViewController.swift` | The controller: settings, hosts the page, answers its messages. `handleCallback` is where the flow's callbacks arrive. |
+| `photoApp/GallerySettings.swift` | The scan's tuning values and the small rules that read them. |
+| `photoApp/GalleryScan.swift` | Starts a scan: the reference selfie, photo access, the photo fetch. |
+| `photoApp/LibraryScan.swift` | Runs the scan: each photo, the iCloud pass, the end-of-scan checks and the results sent to the page. |
+| `photoApp/FaceVision.swift` | Loads photos, checks the selfie, matches faces, checks the body. |
+| `photoApp/MuseScore.swift` | Scores how well a matched photo would serve the Muse. |
+| `photoApp/GalleryPhotos.swift` | Serves photos to the page: thumbnails, originals, captures. |
+| `photoApp/Helpers.swift` | Small shared helpers. |
+| `photoApp/SwanEnvironment.swift` | The values that differ per build: page URL, session URL, key, scan report. |
+| `photoApp/ScanReport.swift` | Posts a JSON report of each scan in sandbox builds; off in production. |
 | `photoApp/FaceRecognition.swift` | Runs the face recognition model and compares faces. |
 | `photoApp/FaceExpression.swift` | Reads expression from a face crop with MediaPipe. |
 | `photoApp/FaceCover.swift` | Reads what covers a selfie's face, with MediaPipe. |
@@ -53,12 +77,12 @@ are a plain single-view app. Nothing in them is Swan-specific.
 
 ## Taking it into your app
 
-Copy the seven Swift files (`ViewController`, `FaceRecognition`,
-`FaceExpression`, `FaceCover`, `BodyScore`, `BodyObjects` and `ScanStore`),
-the `FaceModels` folder and the privacy manifest into your target, add the pod line to your Podfile, and present
-`ViewController` however your app navigates. Every callback the flow reports
-arrives in `COMPONENT_CALLBACK` in the controller; the handlers there print,
-replace them with your own handling.
+Copy the Swift files listed above (all but `SwanSession`, which you replace with
+your own sign-in), the `FaceModels` folder and the privacy manifest into your
+target, add the pod line to your Podfile, and present `ViewController` however
+your app navigates. Every callback the flow reports arrives in
+`handleCallback(_:_:)` in `ViewController.swift`; replace each case with your
+own handling.
 
 What the controller does, what it is built from, how each piece is licensed
 and what leaves the phone: `docs/GALLERY_PICK_IOS_CONTROLLER.md`. The page's

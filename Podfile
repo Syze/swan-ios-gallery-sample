@@ -5,6 +5,9 @@
 platform :ios, '17.6'
 use_frameworks!
 
+# Two builds, both optimised: Sandbox (sandbox environment, scan report on) and Production.
+project 'photoApp', 'Sandbox' => :release, 'Production' => :release
+
 target 'photoApp' do
   pod 'MediaPipeTasksVision', '0.10.21'
 end

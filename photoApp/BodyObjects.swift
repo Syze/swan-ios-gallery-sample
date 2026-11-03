@@ -1,18 +1,10 @@
+// BodyObjects: bags, umbrellas, bicycles and furniture over the body, from MediaPipe's object detector.
 import Foundation
 import UIKit
 import MediaPipeTasksVision
 
-/// Things held or worn over the body — bags, umbrellas, bicycles, chairs —
-/// found by MediaPipe's object detector (EfficientDet-Lite0, int8, 4.6 MB) on
-/// a matched front or side, with their boxes. The body score lowers each
-/// region by the share of it an object covers, and drops the photo when
-/// objects cover about a quarter of the body — GALLERY_PICK_V2_PLAN.md,
-/// item 5b. Measured 30 Oct 2026 on the test photos: handbags right in 10 of
-/// 12 photos at 0.30 and over, backpacks 9 of 11, bicycles 5 of 5; boxes
-/// 8–18% of the frame, bicycles larger. About 40 ms on a Mac.
-///
-/// The model is loaded once, on first use. When it is not in the bundle no
-/// objects are read and the body score stands on the mask alone.
+/// Things held over or beside the body (bags, umbrellas, bicycles, chairs) on a matched front or side,
+/// with their boxes. `BodyScore` lowers each body region by the share of it an object covers.
 struct BodyObjects {
     struct Object {
         let label: String
@@ -21,14 +13,16 @@ struct BodyObjects {
         let box: CGRect
     }
 
-    /// `efficientdet_lite0.tflite` in the app bundle.
+    /// `FaceModels/efficientdet_lite0.tflite` (EfficientDet-Lite0, int8). When it is missing `read`
+    /// returns no objects and the body score uses the person mask alone.
     static let modelName = "efficientdet_lite0"
     /// What counts: the detector's names for things that hide the body.
     static let labels: Set<String> = ["handbag", "backpack", "suitcase", "umbrella", "bicycle", "motorcycle", "chair", "bench", "couch"]
+    /// Minimum detection score, 0–1.
     static let confidence: Float = 0.3
 
-    /// Built on first access. CPU delegate, as the other readers: the scan
-    /// keeps running in the background, where iOS refuses GPU work.
+    /// Built once, on first access. CPU delegate: the scan keeps running in the background,
+    /// where iOS refuses GPU work.
     private static let detector: ObjectDetector? = {
         guard let path = Bundle.main.path(forResource: modelName, ofType: "tflite") else {
             print("🚫 \(modelName).tflite is not in the app — is it a member of the target? Objects over the body are not read.")
@@ -49,21 +43,15 @@ struct BodyObjects {
         }
     }()
 
-    static var isAvailable: Bool { detector != nil }
-
-    /// Loads the model now rather than on the first front, so that match line
-    /// is not a second late.
+    /// Loads the model now so the first front is not slowed.
     static func warmUp() {
-        let started = Date()
-        guard detector != nil else { return }
-        print("🎒 Object reader ready in \(Int(Date().timeIntervalSince(started) * 1000))ms")
+        _ = detector
     }
 
-    /// The objects in an upright image, strongest first. Empty when the reader
-    /// is unavailable or finds none.
+    /// The objects in an upright image, strongest first. Empty when the model is missing or finds none.
     static func read(upright image: CGImage) -> [Object] {
-        guard let detector, let mpImage = try? MPImage(uiImage: UIImage(cgImage: image)),
-              let result = try? detector.detect(image: mpImage) else { return [] }
+        guard let detector, let input = mpImage(image),
+              let result = try? detector.detect(image: input) else { return [] }
         let w = CGFloat(image.width), h = CGFloat(image.height)
         return result.detections.compactMap { d -> Object? in
             guard let c = d.categories.first, let name = c.categoryName, labels.contains(name) else { return nil }

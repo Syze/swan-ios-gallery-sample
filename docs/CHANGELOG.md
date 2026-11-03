@@ -13,7 +13,7 @@ reports its version in the `WEB_READY` message, a version that was never
 published loads the latest instead, and each entry says whether
 `ViewController.swift` needs updating.
 
-**For H&M:** the iOS app loads the mobile page only, so the mobile entries are
+**For iOS apps:** the app loads the mobile page only, so the mobile entries are
 the ones to follow. The page is built from the same source as the npm package,
 and every npm fix and option listed further down is already in it from 1.1.0
 onwards; those entries are kept for reference and need nothing on your side.
@@ -22,8 +22,40 @@ onwards; those entries are kept for reference and need nothing on your side.
 
 ## [Unreleased]
 
-**Controller only; the page is unchanged.** The update replaces
-`ViewController.swift`.
+**Controller only; the page is unchanged.** The update replaces every Swift
+file in `photoApp/` and adds nine new ones (see Code below), and the project
+has two configurations, Sandbox and Production, with a shared scheme each.
+
+### Code
+
+- **The controller is split into smaller files, with the same behaviour.**
+  `ViewController.swift` keeps the settings and the page bridge; the scan,
+  scoring, photo serving and Vision code move to `GallerySettings`,
+  `GalleryScan`, `LibraryScan`, `MuseScore`, `GalleryPhotos`, `FaceVision`
+  and `Helpers`. Copy all of them. Comments are short; repeated code uses
+  shared helpers.
+- **Test tools and switched-off code are removed:** the measurement (eval)
+  mode, the per-photo console logs, the knee rule, the start-of-flow gaze
+  resting point and other options that were off. The console shows errors
+  only.
+- **Sandbox and production builds from the same code.** Two build
+  configurations, Sandbox and Production (Debug and Release are gone), with a
+  scheme each: `photoApp Sandbox` and `photoApp Production`.
+  `SwanEnvironment.swift` holds what differs per build: the page URL, the
+  session URL, the key and the scan report. Production values are
+  placeholders, and a Release build warns until they are filled in.
+- **The scan report is on in sandbox builds only.** Each scan posts one JSON
+  report to Swan's scan ingest (`devphotoingest.api.swanvision.ai`), with its
+  ingest key, gzipped, and retried on server and network errors: the matches with their readings, the withdrawn matches and why, the
+  page's picks, the summary and, new, the end-of-scan checks (usual eye
+  openness, usual sharpness with the lowest four, the gaze resting point and
+  the selfies it rescored).
+- **`shopDomain` is the development shop, `hm_ie`, in every build** (Sandbox
+  and Production).
+- **The flow's callbacks arrive in `handleCallback(_:_:)`**, one case per
+  callback with what it carries.
+- **`kneeUp` and `summary.kneeLength` are no longer sent**; they were always
+  false and 0. Everything else sent to the page is unchanged.
 
 ### Changed
 
@@ -37,6 +69,58 @@ onwards; those entries are kept for reference and need nothing on your side.
   reading spares eyes held wide, which read low by angle alone (7.8° and
   5.4°) but 0.31 and 0.25 on `gazeDown`. Replayed on every saved scan, 94
   selfies: the four judged looking down are removed, nothing else.
+- **Selfies with the head tipped 15° or more down or up against the floor
+  are ruled out**, "head down" and "head up". Behind `headLevelGateEnabled`.
+  A head tipped down to a phone held low faces the lens, so every reading
+  against the camera is level, yet the Muse looks down. The head against the
+  floor comes from the phone's own tilt (its gravity reading in the photo),
+  the face's place in the frame and MediaPipe's pitch. A photo without the
+  tilt (an export, a screenshot, another phone's photo) is not judged. On a
+  phone scan of 90 selfies: the selfies kept read −13° to +13°; the clear
+  cases 21° to 42° down and 34° up. `scoreInputs` gains `cameraTilt` and
+  `headVsFloor`.
+- **A photo with the shopper and their reflection is left out.**
+  `sameShopperFacesMax` is now 1: a photo with two or more faces is a group,
+  even when every face is the shopper's (it was up to 3, all the shopper's).
+- **Landscape photos are left out.** Behind `portraitOnly`: a photo wider
+  than it is tall is skipped from its library record, before it loads, as
+  panoramas already were.
+
+---
+
+## [1.3.14] — 2026-11-03
+
+**Mobile iOS only.** The npm package is unchanged. **Controller: update
+recommended** for sandbox builds that post scan reports; older controllers
+work unchanged.
+
+### Added
+
+- **A stored scan report is linked to the user in PostHog.** When Swan's scan
+  ingest stores a sandbox build's report, the controller sends the page
+  `onGalleryScanReportStored { id, photos }`, and the gallery records the
+  PostHog event `<shopDomain>/gallery/scan_report_stored` with the user's email,
+  its run id, the `scanReportId` and the photo count. The report itself still
+  carries no email. No callback reaches the host. Older pages ignore
+  the message.
+
+---
+
+## [1.3.13] — 2026-11-03
+
+**Mobile iOS only.** The npm package is unchanged. **Controller: no update
+needed.** Page change only.
+
+### Changed
+
+- **With no Tier A selfie, the best Tier B one is pre-selected.** Behind
+  `PRESELECT_SELFIE_B_FLOOR` (0.60): the best Tier B selfie at that score or
+  more, with the eyes at least 90 px apart, fills the selfie slot instead of
+  leaving it empty. It can still be swapped. A library whose best selfie
+  scored 0.673 (phone a little low, light from one side) had left the slot
+  empty; it now gets that selfie, the one the user had picked by hand.
+  Replayed on the 19 saved scans: the other 18 have Tier A selfies and pick
+  as before.
 
 ---
 

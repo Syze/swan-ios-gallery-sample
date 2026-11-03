@@ -1,51 +1,31 @@
+// FaceCover: what covers a selfie's face, from MediaPipe's multiclass selfie segmenter.
 import Foundation
 import UIKit
 import MediaPipeTasksVision
 
-/// What covers a matched selfie's face — GALLERY_PICK_V2_PLAN.md, item 2,
-/// part 2. The MediaPipe multiclass selfie segmenter (background, hair, body
-/// skin, face skin, clothes, accessories; 256×256 input) runs on the same head
-/// crop the expression reader uses and says what each pixel is. From that,
-/// three shares: clothes or accessories over the hairline band above the
-/// brows, over the jaw band inside the chin, and anything that is neither skin
-/// nor hair inside the face oval. Hats, masks and scarves by name come from
-/// Vision's classifier, which already labels them — see
-/// `MuseScore.hatLabels` and `coverLabels`.
-///
-/// Read only for selfies, and only for one that no cheaper gate has already
-/// dropped; the limits live in `ViewController` next to `coverGatesEnabled`.
-/// The model loads once, on first use; when it is missing from the bundle the
-/// reader is unavailable and the scan goes on without it.
+/// What covers a matched selfie's face: MediaPipe's selfie segmenter labels each pixel of the head crop.
+/// The model loads once, on first use; when it is missing `read` returns nil and the scan goes on without it.
 struct FaceCover {
-    /// Share of the hairline band that is clothes or accessories, 0–1. Caps
-    /// measured 0.37–0.52 on a test library, a hood 0.82, bare heads 0.00–0.12.
+    /// Share of the hairline band (above the brows) that is clothes or accessories, 0–1: caps, hoods.
     let hairline: Float
-    /// Share of the jaw band that is clothes or accessories, 0–1. Bare jaws
-    /// read 0.00–0.09 on three libraries; a bare jaw with the chin lowered
-    /// onto a dark polo collar read 0.33, so the limit sits above that.
+    /// Share of the jaw band (inside the chin) that is clothes or accessories, 0–1: masks, scarves.
     let jaw: Float
-    /// Share of the face oval that is neither skin nor hair, 0–1: an object,
-    /// cloth, or the frame's background over the face. Eyeglasses measured
-    /// 0.05–0.06, sunglasses 0.26–0.31.
+    /// Share of the face oval that is neither skin nor hair, 0–1: glasses, objects or background over the face.
     let face: Float
-    /// Share of the hairline band that is hair or skin: a bare head reads high.
-    let bare: Float
-    var ms: Int
-    /// Light across the face, read on its skin pixels only (no hair, glasses
-    /// frames or background): the median brightness of the brighter side over
-    /// the darker side, split on the face's own midline (brow centre to chin).
-    /// Nil without landmarks or with too little skin on either side.
+    /// Median skin brightness of the brighter half of the face over the darker half, split brow to chin.
+    /// Sent to the page for analysis; no rule uses it yet. Nil without landmarks or with too little skin.
     var skinSideRatio: Float? = nil
 
+    /// `FaceModels/selfie_multiclass_256x256.tflite`.
     static let modelName = "selfie_multiclass_256x256"
-    /// The crop's longer side is brought down to this before the model, which
-    /// takes 256×256 anyway: a full-size crop cost 190–300 ms, most of it the
-    /// conversion and resize.
+    /// The crop's longer side is scaled to this many pixels before the model, which takes 256×256 anyway;
+    /// this saves most of the conversion time.
     static let inputPixels = 256
 
     /// The segmenter's classes, in the model's order.
     private enum Class: UInt8 { case background = 0, hair, bodySkin, faceSkin, clothes, accessories }
 
+    /// Built once, on first access. CPU delegate, so it also runs while the app is in the background.
     private static let segmenter: ImageSegmenter? = {
         guard let path = Bundle.main.path(forResource: modelName, ofType: "tflite") else {
             print("🚫 \(modelName).tflite is not in the app — is it a member of the target? Face cover is not read.")
@@ -63,30 +43,18 @@ struct FaceCover {
         }
     }()
 
-    static var isAvailable: Bool { segmenter != nil }
-
     /// Loads the model now rather than on the first selfie.
     static func warmUp() {
-        let started = Date()
-        guard segmenter != nil else { return }
-        print("🧣 Face cover reader ready in \(Int(Date().timeIntervalSince(started) * 1000))ms")
+        _ = segmenter
     }
 
-    var note: String {
-        String(format: "cover hairline %.2f jaw %.2f face %.2f bare %.2f (%dms)", hairline, jaw, face, bare, ms)
-            + (skinSideRatio.map { String(format: "; skin sides %.2f×", $0) } ?? "")
-    }
-
-    /// Reads the head crop. `face` is Vision's face box inside the crop, in the
-    /// crop's pixels with the origin at the top left; `landmarks` are the face
-    /// landmarker's points on the same crop, 0–1 (`FaceExpression.landmarks`),
-    /// for the readings that need the face's geometry.
+    /// Reads the head crop; nil when the model is missing. `face` is Vision's face box in crop pixels,
+    /// top-left origin; `landmarks` (`FaceExpression.landmarks`) are needed only for `skinSideRatio`.
     static func read(headCrop: CGImage, face: CGRect, landmarks: [CGPoint]? = nil) -> FaceCover? {
         guard let segmenter else { return nil }
-        let started = Date()
         let small = downscaled(headCrop) ?? headCrop
         let scale = CGFloat(small.width) / CGFloat(headCrop.width)
-        guard let image = try? MPImage(uiImage: UIImage(cgImage: small)),
+        guard let image = mpImage(small),
               let result = try? segmenter.segment(image: image),
               let mask = result.categoryMask, mask.dataType == .uInt8
         else { return nil }
@@ -96,8 +64,7 @@ struct FaceCover {
         let data = mask.uint8Data
         let box = face.applying(CGAffineTransform(scaleX: scale, y: scale))
 
-        // The share of a band's pixels whose class passes `counting`; inside
-        // the inscribed ellipse when `oval`.
+        // The share of a band's pixels whose class passes `counting`; inside the inscribed ellipse when `oval`.
         func share(_ rect: CGRect, oval: Bool = false, counting: (UInt8) -> Bool) -> Float {
             let x0 = max(0, Int(Float(rect.minX) * sx)), x1 = min(mw, Int(Float(rect.maxX) * sx))
             let y0 = max(0, Int(Float(rect.minY) * sy)), y1 = min(mh, Int(Float(rect.maxY) * sy))
@@ -118,26 +85,20 @@ struct FaceCover {
             return total == 0 ? 0 : Float(hit) / Float(total)
         }
         let covered: (UInt8) -> Bool = { $0 == Class.clothes.rawValue || $0 == Class.accessories.rawValue }
-        let bareSkin: (UInt8) -> Bool = { $0 == Class.hair.rawValue || $0 == Class.faceSkin.rawValue || $0 == Class.bodySkin.rawValue }
         let notFace: (UInt8) -> Bool = { $0 != Class.faceSkin.rawValue && $0 != Class.bodySkin.rawValue && $0 != Class.hair.rawValue }
-        // Vision's box runs from about the brows to the chin. The hairline band
-        // straddles its top edge. The jaw band stays inside its bottom edge: a
-        // collar just under the chin is not a covered jaw (one read 0.42 when
-        // the band reached below the box).
+        // Vision's box runs from about the brows to the chin. The hairline band straddles its top edge;
+        // the jaw band stays inside its bottom edge, so a collar just under the chin does not count.
         let h = box.height
         let hairlineBand = CGRect(x: box.minX, y: box.minY - 0.25 * h, width: box.width, height: 0.4 * h)
         let jawBand = CGRect(x: box.minX + 0.1 * box.width, y: box.maxY - 0.25 * h, width: box.width * 0.8, height: 0.23 * h)
         let oval = box.insetBy(dx: box.width * 0.1, dy: h * 0.05)
         var cover = FaceCover(hairline: share(hairlineBand, counting: covered),
                               jaw: share(jawBand, counting: covered),
-                              face: share(oval, oval: true, counting: notFace),
-                              bare: share(hairlineBand, counting: bareSkin),
-                              ms: 0)
+                              face: share(oval, oval: true, counting: notFace))
         if let landmarks, landmarks.count >= 468, let pixels = rgba(small) {
             cover.readSkin(mask: data, width: mw, height: mh, pixels: pixels, imageWidth: small.width,
                            imageHeight: small.height, landmarks: landmarks)
         }
-        cover.ms = Int(Date().timeIntervalSince(started) * 1000)
         return cover
     }
 
@@ -156,19 +117,14 @@ struct FaceCover {
                 let px = min(imageWidth - 1, Int(Float(x) / sx)), py = min(imageHeight - 1, Int(Float(y) / sy))
                 let i = (py * imageWidth + px) * 4
                 let r = Float(pixels[i]) / 255, g = Float(pixels[i + 1]) / 255, b = Float(pixels[i + 2]) / 255
-                let luma = 0.299 * r + 0.587 * g + 0.114 * b
-                if (Float(x) - top.x) * dy - (Float(y) - top.y) * dx > 0 { sideA.append(luma) } else { sideB.append(luma) }
+                let brightness = luma(r, g, b)
+                if (Float(x) - top.x) * dy - (Float(y) - top.y) * dx > 0 { sideA.append(brightness) } else { sideB.append(brightness) }
             }
         }
         if sideA.count > 50, sideB.count > 50 {
-            let a = Self.median(sideA), b = Self.median(sideB)
+            let a = median(sideA), b = median(sideB)
             skinSideRatio = max(a, b) / max(min(a, b), 0.01)
         }
-    }
-
-    private static func median(_ values: [Float]) -> Float {
-        let sorted = values.sorted()
-        return sorted.count % 2 == 1 ? sorted[sorted.count / 2] : (sorted[sorted.count / 2 - 1] + sorted[sorted.count / 2]) / 2
     }
 
     /// The image's pixels as RGBA bytes, row by row from the top.
@@ -181,8 +137,7 @@ struct FaceCover {
         return Array(UnsafeBufferPointer(start: data.bindMemory(to: UInt8.self, capacity: w * h * 4), count: w * h * 4))
     }
 
-    /// The crop with its longer side at `inputPixels`, or nil when it is
-    /// already that small.
+    /// The crop with its longer side at `inputPixels`, or nil when it is already that small.
     private static func downscaled(_ image: CGImage) -> CGImage? {
         let longest = max(image.width, image.height)
         guard longest > inputPixels else { return nil }

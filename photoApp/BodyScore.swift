@@ -1,45 +1,28 @@
+// BodyScore: how clearly the body shows in a matched full-length photo (fit, outline, light, pose, quality).
 import Foundation
 import CoreGraphics
 import Vision
 
-/// How clearly the body can be seen under the clothes in a matched full-length
-/// photo — GALLERY_PICK_V2_PLAN.md, item 5, part a. The face is not judged
-/// here; it only had to match. Vision's person segmentation gives the body's
-/// outline and the pose request's joints say where the torso, legs and arms
-/// are, so each region can be read for how closely the clothes follow the
-/// body (fit), how clearly the outline stands off the background, and how it
-/// is lit. The pose adds openness (standing open, leaning, sitting, lying,
-/// arms crossed, hands hidden, legs crossed) and the body's sharpness and
-/// size give image quality. T = visibility^0.7 × openness^0.2 × quality^0.1,
-/// with visibility 0.4 torso + 0.4 legs + 0.2 arms.
-///
-/// Read only for a matched front, three-quarter or side, after the face
-/// matched; the switch and the tier line live in `ViewController` next to
-/// `fullLengthScoreV2`. Garment caps (coats, suits) and bags come with part b;
-/// a long cardigan or a wide skirt already falls on the legs fit here.
-///
-/// The starting values below were set on 30 Oct 2026 from five test folders
-/// (126 photos, three people) read on the Mac with the same requests.
+/// How clearly the body can be seen under the clothes in a matched full-length photo, from Vision's person
+/// mask and body pose. T = visibility^0.7 × openness^0.2 × quality^0.1; visibility = 0.4 torso + 0.4 legs + 0.2 arms.
 struct BodyScore {
-    /// T, 0–1, and the tier it gives: "A" at `ViewController.fullLengthTierALine`
-    /// or above, "B" down to `fullLengthUsableFloor`, below that no tier and
-    /// the page does not pre-select it.
+    // MARK: - Result
+
+    /// T, 0–1, and its tier: "A" at `ViewController.fullLengthTierALine` or above, "B" down to
+    /// `fullLengthUsableFloor`, else nil (the page does not pre-select the photo).
     let value: Float
     let tier: String?
     /// The parts the page receives as `scoreParts`.
     let parts: [(name: String, value: Float)]
     /// What held each region or the pose down, for the console.
     let reasons: [String]
-    /// A gate that zeroes the photo: the body under `minBodyPixels` tall in
-    /// the original, or blurred on the body.
+    /// A gate that zeroes the photo: body under `minBodyPixels` tall, blurred, or under too many objects.
     let filter: String?
     /// The raw readings, for `scoreInputs`.
     let readings: [String: Double]
-    /// The clothing colour as CIELAB `[L, a, b]` for `"torso"` and `"legs"`
-    /// (either may be missing), sent to the page as `outfit` for the session
-    /// rule's outfit comparison — item 5c.
+    /// Clothing colour as CIELAB `[L, a, b]` for `"torso"` and `"legs"` (either may be missing),
+    /// sent to the page as `outfit` for its same-outfit session rule.
     let outfit: [String: [Double]]?
-    let ms: Int
 
     /// sRGB (0–1) to CIELAB, D65.
     static func lab(_ r: Float, _ g: Float, _ b: Float) -> [Double] {
@@ -52,97 +35,80 @@ struct BodyScore {
         return [116 * f(Y) - 16, 500 * (f(X) - f(Y)), 200 * (f(Y) - f(Z))].map { ($0 * 10).rounded() / 10 }
     }
 
-    // MARK: Starting values
+    // MARK: - Thresholds
 
-    /// Fit: the region's outline width against what the joints imply, 1 at
-    /// `good` or under, 0 at `bad` or over. Torso: median row width between
-    /// the shoulders and the hips with the arm bands cut out, over the wider
-    /// of the shoulders and hips (or 0.45 of the torso length when the body is
-    /// turned and the joints sit close together). Fitted tops read 0.8–1.1, an
-    /// oversized fleece 1.26–1.61. Legs and arms are against the torso length,
-    /// since no joint gives a limb's thickness: jeans read 0.30–0.47 at the
-    /// thigh and 0.17–0.30 at the shin, fitted sleeves 0.15–0.30.
+    /// Fit: a region's width over what the joints imply; 1 at `good` or under, 0 at `bad` or over.
+    /// Torso is over the wider of shoulders and hips (at least 0.45 torso lengths); limbs are over the torso length.
     static let torsoFit: (good: Double, bad: Double) = (1.05, 1.35)
     static let thighFit: (good: Double, bad: Double) = (0.45, 0.70)
     static let shinFit: (good: Double, bad: Double) = (0.30, 0.50)
     static let armFit: (good: Double, bad: Double) = (0.25, 0.45)
-    /// Outline clarity: luminance contrast across the body's edge at the
-    /// region's rows (0–1 luminance units). A dark top against a dark wall
-    /// read 0.01–0.04, a figure against a plain wall 0.12–0.35.
+    /// Outline clarity: luminance contrast (0–1) across the body's edge; 1 at `good` or over, 0 at `bad` or under.
     static let outline: (good: Double, bad: Double) = (0.14, 0.04)
-    /// Light: mean luminance inside the region. Black clothes in daylight read
-    /// 0.05–0.10, so only a silhouette or a region in deep shadow fails.
+    /// Light: mean luminance (0–1) inside the region; set low so only a silhouette or deep shadow fails.
     static let light: (good: Double, bad: Double) = (0.10, 0.03)
-    /// Skin showing in a region adds up to this: the outline is the body's own.
+    /// Added to a region's score at full skin share: where skin shows, the outline is the body's own.
     static let skinBonus: Double = 0.1
-    /// Sitting: the lowest knee under this far below the hips (torso lengths),
-    /// a thigh tilted past this from vertical, or a knee bent past this.
+    /// Sitting: lowest knee less than this far below the hips (torso lengths), a thigh tilted past
+    /// this from vertical (degrees), or a knee bent tighter than this (degrees).
     static let sittingKneeDrop: Double = 0.5
     static let sittingThighTilt: Double = 50
     static let sittingKneeAngle: Double = 120
-    /// Leaning: the torso's tilt from vertical, light then heavy; lying past the last.
+    /// Torso tilt from vertical, in degrees: light lean, heavy lean, and lying past the last.
     static let leanLight: Double = 12
     static let leanHeavy: Double = 25
     static let lyingTilt: Double = 60
-    /// Openness values from the spec: standing open 1, light lean 0.7, sitting
-    /// 0.6, crossed or hands hidden or heavy lean 0.5, lying 0.3.
+    /// Openness per pose: standing 1, light lean 0.7, sitting 0.6, arms or legs crossed, hands hidden
+    /// or heavy lean 0.5, lying 0.3.
     static let opennessLightLean: Float = 0.7
     static let opennessSitting: Float = 0.6
     static let opennessClosed: Float = 0.5
     static let opennessLying: Float = 0.3
-    /// Sitting also hides the legs and part of the torso.
+    /// Multipliers on the legs and torso scores when sitting, which hides part of them.
     static let sittingLegs: Float = 0.8
     static let sittingTorso: Float = 0.9
     /// Legs crossed: the ankles swap sides by more than this (torso lengths).
     static let crossedAnkles: Double = 0.15
-    /// Sharpness: Laplacian variance over the body mask. Sharp bodies read
-    /// 0.005–0.05, soft ones 0.0002–0.001. Floored, since plain clothes have
-    /// little texture to measure.
+    /// Sharpness: Laplacian variance of luminance (0–1) over the body mask. Floored at `sharpnessFloor`,
+    /// since plain clothes have little texture; under 0.4 × `bad` gates the photo as blurred.
     static let sharpness: (good: Double, bad: Double) = (0.003, 0.0005)
     static let sharpnessFloor: Float = 0.3
-    /// Head to ankle under this many pixels of the original is a gate.
+    /// Head-to-ankle height, in pixels of the original, below which the photo is gated.
     static let minBodyPixels: Double = 400
-    /// Joint confidence, as the body check's.
+    /// Minimum joint confidence (0–1), as in the body check.
     static let jointConfidence: Float = 0.3
-    /// The segmentation quality. Balanced read the same widths as accurate on
-    /// the test folders at half the time (39 against 80 ms on a Mac).
+    /// Person segmentation quality: balanced reads the same widths as accurate in about half the time.
     static let segmentation: VNGeneratePersonSegmentationRequest.QualityLevel = .balanced
     static let weights: [(name: String, weight: Float)] = [("visibility", 0.7), ("openness", 0.2), ("quality", 0.1)]
 
     typealias J = VNHumanBodyPoseObservation.JointName
 
-    /// Garment caps — plan item 5b, built by `ViewController.garmentCaps(for:)`
-    /// from the whole-photo labels. A region can read no higher than its cap:
-    /// a suit jacket shapes the torso, so the torso cannot say "clearly seen".
+    // MARK: - Garment caps and objects
+
+    /// Garment caps from the whole-photo labels (`ViewController.garmentCaps(for:)`): a region scores no
+    /// higher than its cap, since e.g. a suit jacket shapes the torso.
     struct Caps {
         var torso: Float = 1
         var legs: Float = 1
         var arms: Float = 1
-        /// The labels that set them, for the note: "suit 0.83".
+        /// The labels that set the caps, for the reasons line, e.g. "suit 0.83".
         var why: [String] = []
     }
 
-    /// `image` is the scan's render the pose was read on, with the orientation
-    /// Vision was given; `body` the pose observation the body check kept;
-    /// `face` the matched face box (normalised, Vision's bottom-left origin)
-    /// for the skin colour; `originalScale` the original's pixels per render
-    /// pixel.
-    /// Objects covering this share of the body's mask make the photo unusable —
-    /// item 5b's "object or another person over about a quarter of the outline".
+    /// Objects covering this share (0–1) of the body's mask gate the photo.
     static let objectBodyGate = 0.25
     /// Objects that only count when the shopper sits on them.
     static let furniture: Set<String> = ["chair", "bench", "couch"]
-    /// A box over this share of the body's mask is scenery (a canopy read as an
-    /// umbrella, a sofa the shopper stands against), not something held: nothing
-    /// held encloses the whole person. Ignored, and said so in the note.
+    /// A box covering this share (0–1) of the body's mask or more is scenery (a canopy, a sofa behind),
+    /// not something held; it is ignored and noted in `reasons`.
     static let objectAround = 0.9
 
-    /// `objects` are what `BodyObjects` found on the upright image, boxes
-    /// normalised; each region is lowered by the share of its mask pixels
-    /// inside any box.
+    // MARK: - Scoring
+
+    /// `image`: the render the pose was read on; `body`: the kept pose; `face`: the matched face box (normalised,
+    /// bottom-left origin) for skin colour; `originalScale`: original pixels per render pixel; `objects`: from `BodyObjects`.
     init?(image source: CGImage, orientation: CGImagePropertyOrientation, body: VNHumanBodyPoseObservation,
           face: CGRect?, originalScale: Double, caps: Caps? = nil, objects: [BodyObjects.Object] = []) {
-        let started = Date()
         // Everything below works upright, as the joints are.
         guard let image = Self.upright(source, orientation) else { return nil }
         let w = image.width, h = image.height
@@ -154,7 +120,7 @@ struct BodyScore {
         func lum(_ x: Int, _ y: Int) -> Float {
             guard x >= 0, y >= 0, x < w, y < h else { return 0 }
             let i = (y * w + x) * 4
-            return (0.299 * Float(rgba[i]) + 0.587 * Float(rgba[i + 1]) + 0.114 * Float(rgba[i + 2])) / 255
+            return luma(Float(rgba[i]), Float(rgba[i + 1]), Float(rgba[i + 2])) / 255
         }
         func rgb(_ x: Int, _ y: Int) -> (Float, Float, Float) {
             let i = (y * w + x) * 4
@@ -496,10 +462,8 @@ struct BodyScore {
         if objectShare >= Self.objectBodyGate { filter = filter ?? String(format: "objects over %.0f%% of the body", objectShare * 100) }
         if quality < 1 { reasons.append(String(format: "sharpness %.2f", quality)) }
 
-        // The outfit's colour, for the page's session rule (item 5c): CIELAB
-        // means over the middle of the trunk and along the thighs. Measured 30
-        // Oct 2026: the same outfit in one session reads under ΔE 10, a
-        // different one 20–40.
+        // The outfit's colour for the page's session rule: CIELAB means over the middle of the trunk
+        // and along the thighs.
         func labMean(along a: CGPoint, _ b: CGPoint, halfWidth: CGFloat, from: Double, to: Double) -> (n: Int, lab: [Double])? {
             var n = 0; var sr: Float = 0, sg: Float = 0, sb: Float = 0
             var t = from
@@ -539,14 +503,9 @@ struct BodyScore {
         self.tier = filter != nil ? nil : (t >= ViewController.fullLengthTierALine ? "A" : (t >= ViewController.fullLengthUsableFloor ? "B" : nil))
         self.reasons = reasons
         self.readings = readings
-        self.ms = Int(Date().timeIntervalSince(started) * 1000)
     }
 
-    var note: String {
-        let detail = parts.map { String(format: "%@ %.2f", $0.name, $0.value) }.joined(separator: " ")
-        let held = reasons.isEmpty ? "" : "; held down by " + reasons.joined(separator: ", ")
-        return String(format: "body [%@]%@ (%dms)", detail, held, ms)
-    }
+    // MARK: - Helpers
 
     /// The image drawn upright, so pixel reads match the joints' normalised space.
     static func upright(_ image: CGImage, _ orientation: CGImagePropertyOrientation) -> CGImage? {

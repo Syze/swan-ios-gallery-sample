@@ -1,114 +1,69 @@
+// FaceExpression: expression, gaze and head angle of a matched face, from MediaPipe's face landmarker.
 import Foundation
 import UIKit
 import MediaPipeTasksVision
 
-/// The expression on a matched face, read by MediaPipe's face landmarker from
-/// the head crop: its 52 blendshapes reduced to the few the Muse score uses.
-/// Smiles, open mouths, closed eyes, winks and raised brows — the things a
-/// face has to be free of to read as a "model" face. Measured against 4,000
-/// labelled faces, the landmarker calls a smile right 94 times in 100 where
-/// lip geometry manages 84, and it is the only one of the two that sees a
-/// subtle closed-mouth smile or a raised brow.
-///
-/// The model is loaded once, on first use. When it is not in the bundle the
-/// reader is unavailable and the score falls back to its own lip and eye
-/// geometry, so the controller keeps working without it.
+/// The expression on a matched face, read by MediaPipe's face landmarker from the head crop.
+/// The model loads once, on first use; when it is missing `read` returns nil and the score uses Vision's geometry.
 struct FaceExpression {
     /// Mean of the left and right smile blendshapes, 0–1.
     let smile: Float
     let jawOpen: Float
     let blinkLeft: Float
     let blinkRight: Float
-    /// Inner brows raised, 0–1 — a stare or surprise. Head tilt can inflate it,
-    /// which is why the pose term stays with Vision.
+    /// Inner brows raised, 0–1 (a stare or surprise). Head tilt can inflate it.
     let browUp: Float
-    /// Mean of the two squint blendshapes. Near 0 is a wide-eyed stare.
+    /// Mean of the two squint blendshapes, 0–1. Near 0 is a wide-eyed stare.
     let squint: Float
-    /// The larger of the two eye-wide blendshapes: the lids pulled open beyond
-    /// rest. Relaxed faces measure 0.00–0.02, eyes held open 0.05–0.26, with or
-    /// without the brows going up.
+    /// The larger of the two eye-wide blendshapes, 0–1: the lids pulled open beyond rest.
     let eyeWide: Float
-    /// Teeth showing: the upper lip raised or the lower lip pulled down, the
-    /// larger of the two pairs' means. Smiles with the lips closed measure
-    /// 0.00–0.11, smiles showing teeth 0.2 and up.
+    /// Teeth showing, 0–1: upper lip raised or lower lip pulled down, the larger of the two pairs' means.
     let teeth: Float
-    /// Where the eyes point, from the eye-look blendshapes: up and down are
-    /// the means of the two eyes, side is the stronger of the two sideways
-    /// pairs (left eye in + right eye out, or the reverse). A level head with
-    /// the eyes raised or lowered reads here and nowhere else. Logged only;
-    /// no limit is set until real values have been seen.
+    /// Eye direction from the eye-look blendshapes, 0–1. `gazeDown` feeds the looking-down filter;
+    /// `gazeUp` and `gazeSide` are sent to the page for analysis; no rule uses them yet.
     let gazeUp: Float
     let gazeDown: Float
     let gazeSide: Float
-    /// Where the eyes point in the head, in degrees, the mean of the two eyes:
-    /// the iris centre's offset from the midpoint of the eye's corners, along
-    /// and across the line between them, turned into millimetres by the iris
-    /// size and into an angle over a 12 mm eyeball radius. Yaw is positive
-    /// toward the image's right, pitch positive downward in the image. Logged
-    /// only (plan, gaze units): the resting offset and the signs are set from
-    /// labelled photos before gaze is scored, and gaze to the lens is this
-    /// plus the head's angle. Nil without iris points.
+    /// Eye rotation in the head, in degrees, mean of both eyes, from the iris centre against the eye corners.
+    /// Yaw is positive toward the image's right, pitch positive downward. Nil without iris points.
     let eyeYaw: Float?
     let eyePitch: Float?
-    /// Iris diameter in the crop's pixels, the mean of the two irises from the
-    /// landmarker's iris points (468–477). Every iris is about 11.7 mm across,
-    /// so with the camera's focal length this gives the distance to the face —
-    /// the v2 "too close" gate. Nil when the model gave no iris points.
+    /// Iris diameter in crop pixels, mean of both irises (points 468–477). An iris is about 11.7 mm across,
+    /// so this gives the distance to the face. Nil without iris points.
     let irisPixels: Float?
-    /// Lips pushed forward (`mouthPucker`) and rounded (`mouthFunnel`); lips
-    /// pressed together, the mean of the two sides; brows pulled down (a
-    /// frown), the mean of the two sides. Read for the v2 selfie score's
-    /// expression group — see `ViewController.selfieScoreV2`.
+    /// Lips pushed forward, lips rounded, lips pressed, brows pulled down (a frown), each 0–1.
+    /// Read by the selfie score's expression group.
     let pucker: Float
     let funnel: Float
     let press: Float
     let browDown: Float
-    /// Camera height, logged only (plan, item 3: "camera height, to set"). The
-    /// nose-to-brow length over the nose-to-chin length (landmarks 9, 1, 152):
-    /// a camera below the face shows the lower face larger, so the ratio falls.
-    /// One pair measured 30 Oct 2026: a selfie shot from below 0.72, one at eye
-    /// level 0.83. Nil without landmarks.
+    /// Nose-to-brow over nose-to-chin length (landmarks 9, 1, 152): lower when the camera is below the face,
+    /// higher when above. Read by `ViewController.cameraAboveGate`. Nil without landmarks.
     let faceRatio: Float?
-    /// Fine detail on the face itself: the Laplacian variance of the box the
-    /// face's points span, drawn grey at 256 × 256, × 1000. Compared with the
-    /// shopper's other selfies for the relative blur gate — see
-    /// `ViewController.relativeBlurGateEnabled`. Nil without landmarks.
+    /// Fine detail on the face: `laplacianVariance` of the box the landmarks span. Compared with the
+    /// shopper's other selfies for the relative blur gate. Nil without landmarks.
     let faceDetail: Float?
-    /// The head's angle to the camera from the landmarker's face transform, in
-    /// degrees, signed; pitch is positive when the camera looks up at the face.
-    /// The pitch is what the v2 selfie gate and pose group read — see
-    /// `ViewController.mediaPipePitchEnabled`; yaw and roll are logged only.
-    /// Nil without the transform.
+    /// Head angle to the camera from the landmarker's face transform, in degrees, signed; pitch is
+    /// positive when the camera looks up at the face. Nil without the transform.
     let headPitch: Float?
     let headYaw: Float?
     let headRoll: Float?
-    /// How open the eyes are: the gap between the lids (159–145, 386–374) over
-    /// the iris's width, the narrower eye of the two. A squint or a look down
-    /// narrows the gap while the iris keeps its size. Logged only, until a
-    /// line is set. Nil without iris points.
+    /// Eye openness: lid gap (159–145, 386–374) over iris width, the narrower eye. Sent to the page
+    /// for analysis; no rule uses it yet. Nil without iris points.
     let lidGap: Float?
-    /// The landmarker's points in the head crop, 0–1 with the origin at the top
-    /// left, for readers of the same crop that need the face's geometry — see
-    /// `FaceCover.read`. Empty without landmarks.
+    /// The landmarker's points in the head crop, 0–1, top-left origin; used by `FaceCover.read`. Empty without landmarks.
     let landmarks: [CGPoint]
-    let ms: Int
 
-    /// The more open eye: a wink leaves one eye open and scores low here while
-    /// `blinkBoth` stays low, so it ranks lower without being filtered out.
+    /// Blink of the more closed eye: high for a wink as well as for both eyes shut.
     var blinkMax: Float { max(blinkLeft, blinkRight) }
-    /// Both eyes shut.
+    /// Blink of the more open eye: high only when both eyes are shut.
     var blinkBoth: Float { min(blinkLeft, blinkRight) }
 
-    var note: String {
-        String(format: "expr smile %.2f jaw %.2f blink %.2f/%.2f brow %.2f wide %.2f teeth %.2f pucker %.2f funnel %.2f press %.2f frown %.2f gaze up %.2f down %.2f side %.2f (%dms)", smile, jawOpen, blinkLeft, blinkRight, browUp, eyeWide, teeth, pucker, funnel, press, browDown, gazeUp, gazeDown, gazeSide, ms)
-    }
-
-    /// `face_landmarker.task` in the app bundle, float16 with blendshapes, 3.7 MB.
+    /// `FaceModels/face_landmarker.task`: float16, with blendshapes.
     static let modelName = "face_landmarker"
 
-    /// Built on first access; Swift makes that thread-safe. CPU delegate on
-    /// purpose: the scan keeps running when the app goes to the background, and
-    /// iOS refuses GPU work there — the same reason the face matcher avoids it.
+    /// Built once, on first access (thread-safe). CPU delegate: the scan keeps running in the
+    /// background, where iOS refuses GPU work.
     private static let landmarker: FaceLandmarker? = {
         guard let path = Bundle.main.path(forResource: modelName, ofType: "task") else {
             print("🚫 \(modelName).task is not in the app — is it a member of the target? Expression falls back to lip and eye geometry.")
@@ -128,8 +83,6 @@ struct FaceExpression {
             return nil
         }
     }()
-
-    static var isAvailable: Bool { landmarker != nil }
 
     /// The Laplacian variance of an image drawn grey at `side` × `side`, × 1000:
     /// how much fine detail it holds. Motion blur and missed focus take it down.
@@ -155,21 +108,16 @@ struct FaceExpression {
         return Float((sumSquares / count - mean * mean) * 1000)
     }
 
-    /// Loads the model now rather than on the first match, so the first match
-    /// line is not a second late. Called when the reference face is ready.
+    /// Loads the model now so the first match is not slowed. Called when the reference face is ready.
     static func warmUp() {
-        let started = Date()
-        guard landmarker != nil else { return }
-        print("🙂 Expression reader ready in \(Int(Date().timeIntervalSince(started) * 1000))ms")
+        _ = landmarker
     }
 
-    /// The expression in a head crop — the face box with generous margin, so
-    /// the landmarker, built for faces that fill the frame, gets what it expects.
-    /// Nil when the reader is unavailable or finds no face in the crop.
+    /// The expression in a head crop (the face box with a generous margin, as the landmarker expects).
+    /// Nil when the model is missing or no face is found.
     static func read(headCrop: CGImage) -> FaceExpression? {
         guard let landmarker else { return nil }
-        let started = Date()
-        guard let image = try? MPImage(uiImage: UIImage(cgImage: headCrop)),
+        guard let image = mpImage(headCrop),
               let result = try? landmarker.detect(image: image),
               let categories = result.faceBlendshapes.first?.categories
         else { return nil }
@@ -178,7 +126,6 @@ struct FaceExpression {
             if let name = category.categoryName { values[name] = category.score }
         }
         func value(_ name: String) -> Float { values[name] ?? 0 }
-        // Iris width: the outer two of each iris's four rim points, in pixels.
         var irisPixels: Float?
         var faceRatio: Float?
         var eyeYaw: Float?, eyePitch: Float?
@@ -189,6 +136,7 @@ struct FaceExpression {
             func across(_ a: Int, _ b: Int) -> Float {
                 hypot((points[a].x - points[b].x) * w, (points[a].y - points[b].y) * h)
             }
+            // Iris width: the outer two of each iris's four rim points, in pixels.
             irisPixels = (across(469, 471) + across(474, 476)) / 2
             let lower = across(1, 152)
             if lower > 0 { faceRatio = across(9, 1) / lower }
@@ -259,7 +207,6 @@ struct FaceExpression {
             headYaw: headYaw,
             headRoll: headRoll,
             lidGap: lidGap,
-            landmarks: (result.faceLandmarks.first ?? []).map { CGPoint(x: CGFloat($0.x), y: CGFloat($0.y)) },
-            ms: Int(Date().timeIntervalSince(started) * 1000))
+            landmarks: (result.faceLandmarks.first ?? []).map { CGPoint(x: CGFloat($0.x), y: CGFloat($0.y)) })
     }
 }

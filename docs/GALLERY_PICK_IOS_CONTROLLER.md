@@ -1,4 +1,4 @@
-# Gallery Pick — iOS controller notes for 1.3.10
+# Gallery Pick — iOS controller notes for 1.3.14
 
 What the native code does on the phone, what it is built from, how each part
 is licensed, and what leaves the device. Companion to `CHANGELOG.md` and
@@ -11,7 +11,15 @@ All of them are in `native-samples/`. The Podfile names the sample target
 
 | File | Role |
 |---|---|
-| `ViewController.swift` | Hosts the web page, scans the photo library, matches faces, scores and filters photos, uploads the selected ones. |
+| `ViewController.swift` | Settings, hosts the web page, answers its messages; `handleCallback` receives the flow's callbacks. |
+| `GallerySettings.swift` | The scan's tuning values (gates, curves, limits) and the small rules that read them. |
+| `GalleryScan.swift`, `LibraryScan.swift` | The library scan: the reference selfie, photo access, each photo, the iCloud pass, the end-of-scan checks, the results. |
+| `FaceVision.swift` | Loads photos, checks the selfie, matches faces, checks the body. |
+| `MuseScore.swift` | Scores a matched photo for the Muse (the selfie score and its gates). |
+| `GalleryPhotos.swift` | Serves photos to the page: thumbnails, originals, captures, analysis. |
+| `Helpers.swift` | Small shared helpers. |
+| `SwanEnvironment.swift` | The values that differ between a sandbox and a production build: page URL, session URL, key, scan report. |
+| `ScanReport.swift` | Posts a JSON report of each scan in sandbox builds; off in production. |
 | `FaceRecognition.swift` | Runs the face recognition model and compares faces. |
 | `FaceExpression.swift` | Reads facial expression (smile, blink, brows, eyes, iris size) from a face crop. |
 | `FaceCover.swift` | Reads what covers a selfie's face (hairline band, jaw band, face oval) from a face crop. |
@@ -170,16 +178,14 @@ dropped. Verdicts and face embeddings stay on the phone between scans, in the
 app's private folder described above; everything else exists only in memory
 during the scan.
 
-## Debug switches, all off in the shared build
+## Scan report, sandbox builds only
 
-| Switch | Default | What it does when on |
-|---|---|---|
-| `verboseLogging` | off | One console line per photo scanned, on the developer's Mac only. Nothing is transmitted. |
-| `evalMode` | off | Writes a CSV of the scan into the app's own Documents folder for the developer to pull by cable. Never uploaded. |
-| `debugBridgeLogging` | off | Prints the messages between page and controller to the console. |
-| `debugDumpCrops` | off | Writes face crops to the app's Documents folder. |
-| `ownPhotoLogEnabled` | on in the review build | With `verboseLogging`, prints each borderline face's distance to the user's sure matches and the capture date of every photo the gap rule touches. Console only. |
-| `fullLengthLabelLog` | on in the review build | With `verboseLogging`, prints Vision's whole-photo labels over 0.2 on each front and side. Console only. |
+| Setting | Sandbox | Production | What it does when set |
+|---|---|---|---|
+| `scanReport` in `SwanEnvironment.swift` | set | nil | Posts one JSON report per scan to Swan's scan ingest (`devphotoingest.api.swanvision.ai`, with its ingest key, gzipped, retried on server and network errors): each match with its score and readings, the withdrawn matches and why, the end-of-scan checks (usual eye openness, usual sharpness, gaze resting point), the page's picks, the scan summary and the phone model. Photo ids are cut to 8 characters, except `dupGroup`, which carries the full photo identifier. No images, face embeddings, email or tokens; it does hold each photo's face and body measurements (`scoreInputs`) and capture time, so treat it as personal data. |
+
+The console shows errors only: a missing model file, the page not loading,
+a photo that could not be read or served, the results store not saving.
 
 The page has review switches of its own in `galleryConstants.ts`:
 `SHOW_SCORE_BADGE` and `SHOW_ID_BADGE` put the score and the first 8
