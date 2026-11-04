@@ -22,8 +22,7 @@ onwards; those entries are kept for reference and need nothing on your side.
 
 ## [Unreleased]
 
-**Controller only; the page is unchanged.** The update replaces every Swift
-file in `photoApp/` and adds nine new ones (see Code below), and the project
+**Controller only.** The update replaces every Swift file in `photoApp/` and adds nine new ones (see Code below), and the project
 has two configurations, Sandbox and Production, with a shared scheme each.
 
 ### Code
@@ -102,6 +101,27 @@ has two configurations, Sandbox and Production, with a shared scheme each.
 
 ---
 
+## [1.3.16] — 2026-11-04
+
+**Mobile iOS only.** **Controller: update recommended** for the two new socket
+callbacks in `handleCallback`; older controllers work unchanged.
+
+### Changed
+
+- **A socket timeout checks the user's profile before failing.** After 10
+  minutes with no final answer, the page asks `GET /user/profile`. If it says
+  this build's Muse was made (`isMuseGenerated` is `"success"` for the same
+  `museId`), the flow goes on to the Muse (`onMuseEnd` reports `ready`, with
+  `data.via: "profile"`); otherwise the timeout error shows as before.
+- **Two new callbacks for the build socket:** `onMuseSocketOpen` when it
+  connects, and `onMuseSocketClose` when it closes, with the close `code`,
+  `reason`, `wasClean`, and `early` when it closed before the build finished.
+  `onMuseEnd` and `onError` are unchanged.
+- **The building screen's strip no longer flashes** on iPhone. Same look; the
+  Reduce Motion fade is unchanged.
+
+---
+
 ## [1.3.15] — 2026-11-04
 
 **Mobile iOS only.** The npm package is unchanged. **Controller: no update
@@ -126,13 +146,9 @@ work unchanged.
 
 ### Added
 
-- **A stored scan report is linked to the user in PostHog.** When Swan's scan
-  ingest stores a sandbox build's report, the controller sends the page
-  `onGalleryScanReportStored { id, photos }`, and the gallery records the
-  PostHog event `<shopDomain>/gallery/scan_report_stored` with the user's email,
-  its run id, the `scanReportId` and the photo count. The report itself still
-  carries no email. No callback reaches the host. Older pages ignore
-  the message.
+- **The controller tells the page when a sandbox build's scan report is
+  stored:** `onGalleryScanReportStored { id, photos }`. No callback reaches
+  the host, and older pages ignore the message.
 
 ---
 

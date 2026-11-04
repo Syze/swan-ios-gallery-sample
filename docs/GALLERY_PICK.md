@@ -310,7 +310,7 @@ case "COMPONENT_CALLBACK":
 
 `callbackName` is exactly the prop name — `onComplete`, `onCaptureComplete`,
 `onRetry`, `onImageSelect`, `onLoadMore`, `onUploadStart`, `onUploadEnd`,
-`onMuseStart`, `onMuseEnd`, `onError`.
+`onMuseStart`, `onMuseSocketOpen`, `onMuseEnd`, `onMuseSocketClose`, `onError`.
 
 > The payload of a callback is **not** sensitive-free. `onComplete` carries
 > presigned URLs and the user's email; `onMuseEnd` carries the whole build frame.
@@ -370,7 +370,9 @@ All optional. Height is always centimetres.
 | `onUploadStart` | The chosen photos begin uploading. |
 | `onUploadEnd` | One **file** finished uploading — per file, not per set, and for failures too. |
 | `onMuseStart` | The Muse build is requested. |
+| `onMuseSocketOpen` | The build socket connected. Carries `museId`. |
 | `onMuseEnd` | The build socket answers — **success or failure**. |
+| `onMuseSocketClose` | The build socket closed. Carries `code` (1000 a normal close, 1006 dropped with no close frame), `reason`, `wasClean`, and `early: true` when it closed before the build settled (then `onMuseEnd` reports a failure). |
 | `onComplete` | The run finished successfully. |
 | `onCaptureComplete` | The camera fallback finished (fires **instead of** `onComplete`). |
 | `onRetry` | The user acted on the failure screen. |
@@ -409,6 +411,11 @@ onMuseEnd({
 > silence. `data` is also the only place `missingRoles` and `rejectedPhotos` are
 > readable.
 
+> **After 10 minutes with no final answer, the page asks `/user/profile`.** When
+> it reports `isMuseGenerated: "success"` for this same `museId`, the build counts
+> as finished: `onMuseEnd` reports `ready` with `data.via: "profile"` and the
+> Muse images load as usual. Otherwise the timeout error shows as before.
+
 ```ts
 onImageSelect({ assetId: string, selected: boolean, count: number, email?: string, auto?: true, type?, distance?, score?, rank?, scoreParts?, scorePenalties?, scoreFilter?, scoreInputs? })
 onLoadMore({ path: "shared_library" | "older_photos", shown: number, selected: number, email? })
@@ -442,6 +449,9 @@ A normal library run fires:
 ```
 onImageSelect × n  ─>  onUploadStart  ─>  onUploadEnd × n  ─>  onMuseStart  ─>  onMuseEnd(ready)  ─>  onComplete
 ```
+
+`onMuseSocketOpen` comes after `onMuseStart`, and `onMuseSocketClose` around
+`onMuseEnd`; they bracket the build socket.
 
 A failed build stops at `onMuseEnd(failed)`, followed by `onError`. **`onComplete`
 never fires.** If you treat `onComplete` as "the run ended", a failed build looks
@@ -574,7 +584,7 @@ iOS for more library photos has to keep it.
 | `onGalleryFullImage` | `{ id, dataURI, original, hasVideo? }` or `{ id, error }` |
 | `onGalleryThumbnails` | `{ thumbs: [{ id, dataURI }] }` |
 | `onGalleryPickedMore` | `{ added }` — only when the user actually shared more |
-| `onGalleryScanReportStored` | `{ id, photos }` — sandbox builds only, after Swan's scan ingest stored the scan report; the page records it as the PostHog event `<shopDomain>/gallery/scan_report_stored` and nothing else |
+| `onGalleryScanReportStored` | `{ id, photos }` — sandbox builds only, after Swan's scan ingest stored the scan report. |
 
 ### `onGalleryPhotoAnalysis` — read this one carefully
 
@@ -1071,6 +1081,22 @@ Every release has its own address, for example
   reference host logs it.
 - **Each release says whether `ViewController.swift` needs updating.**
 
+### 1.3.16 — 4 November 2026
+
+**Controller:** update recommended for the two new socket callbacks. Older
+controllers keep working.
+
+**Flow**
+
+- After a 10-minute socket timeout the page asks `/user/profile`; when it says
+  this build's Muse was made, the Muse loads instead of the timeout error.
+- The building screen's strip no longer flashes on iPhone.
+
+**Setup**
+
+- New callbacks `onMuseSocketOpen` and `onMuseSocketClose` (with the close
+  `code`, `reason`, `wasClean`, `early`). See the table above.
+
 ### 1.3.15 — 4 November 2026
 
 **Controller:** no update needed. Page change only.
@@ -1089,9 +1115,7 @@ Older controllers keep working.
 **Setup**
 
 - `onGalleryScanReportStored { id, photos }`: sent by a sandbox build once
-  Swan's scan ingest has stored its scan report. The page records it as the
-  PostHog event `<shopDomain>/gallery/scan_report_stored` with the user's
-  email and run id. See the table above.
+  Swan's scan ingest has stored its scan report. See the table above.
 
 ### 1.3.13 — 3 November 2026
 

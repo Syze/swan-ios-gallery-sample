@@ -602,6 +602,12 @@ extension ViewController: WKScriptMessageHandler {
         case "onMuseEnd":
             // The build settled: `status`, `phase`, `museId`, `message`; `data` holds `missingRoles` and `rejectedPhotos`.
             break
+        case "onMuseSocketOpen":
+            // The build socket connected: `museId`.
+            break
+        case "onMuseSocketClose":
+            // The build socket closed: `code` (1000 normal, 1006 dropped), `reason`, `wasClean`; `early` when before the build settled.
+            break
         case "onComplete":
             // The end of the flow: `museId`, `museStatus`, server `photoIds` (what POST /muse/build takes), `heightInCm`, `museImages`.
             break
