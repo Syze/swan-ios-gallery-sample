@@ -141,6 +141,11 @@ final class LibraryScan {
     private var ownKept: [String] = []
     private var gazeRescored: [String] = []
     private var libraryRest: (yaw: Float, pitch: Float)?
+    /// The shopper's usual frown reading, the line drawn from it, and the selfies it rescored.
+    private var frownBaseline: Float?
+    private var frownLine: Float?
+    private var frownSelfies = 0
+    private var frownRescored: [String] = []
     /// The close selfies the blur gate compared, and the selfies the gaze rest point came from.
     private var blurShown: [(id: String, detail: Float)] = []
     private var gazeSelfies = 0
@@ -743,6 +748,33 @@ final class LibraryScan {
                 }
             }
         }
+
+        // The frown against the shopper's own brows — see `frownRelativeEnabled`. After the gaze
+        // rest point, so a selfie rescored there is rescored from its new values.
+        if ViewController.frownRelativeEnabled {
+            let shownSelfies = matchedIds.filter { selfieScores[$0] != nil }
+            let close = shownSelfies.compactMap { id -> Float? in
+                guard let score = selfieScores[id], let cm = score.cameraCm, cm <= ViewController.frownBaselineMaxCm else { return nil }
+                return score.expression?.browDown
+            }
+            frownSelfies = close.count
+            if close.count >= ViewController.frownBaselineMin {
+                let usual = median(close)
+                let line = min(max(ViewController.frownLimit, usual + ViewController.frownOverUsual), ViewController.frownCeiling)
+                frownBaseline = usual
+                frownLine = line
+                var selfieAssets: [String: PHAsset] = [:]
+                PHAsset.fetchAssets(withLocalIdentifiers: shownSelfies, options: nil).enumerateObjects { asset, _, _ in selfieAssets[asset.localIdentifier] = asset }
+                for id in shownSelfies {
+                    guard let old = selfieScores[id], let new = old.refrowned(line: line), let asset = selfieAssets[id],
+                          let entry = matchScores[id], abs(new.value - old.value) > 0.0005 || new.tier != old.tier else { continue }
+                    let fields = ViewController.orderFields(asset: asset, type: .selfie, score: new)
+                    matchScores[id] = (entry.distance, entry.type, new.value, new.breakdown.merging(fields) { _, new in new })
+                    selfieScores[id] = new
+                    frownRescored.append(id)
+                }
+            }
+        }
     }
 
     // MARK: - Scan report
@@ -777,6 +809,12 @@ final class LibraryScan {
             checks["gazeRest"] = ["yaw": twoPlaces(rest.yaw), "pitch": twoPlaces(rest.pitch), "selfies": gazeSelfies,
                                   "default": [twoPlaces(ViewController.gazeRest.yaw), twoPlaces(ViewController.gazeRest.pitch)],
                                   "rescored": rescored]
+        }
+        if let usual = frownBaseline, let line = frownLine {
+            let rescored = frownRescored.map { id -> [String: Any] in
+                ["id": short(id), "score": twoPlaces(matchScores[id]?.score ?? 0), "tier": matchScores[id]?.breakdown?["tier"] as? String ?? ""]
+            }
+            checks["frown"] = ["usual": twoPlaces(usual), "line": twoPlaces(line), "closeSelfies": frownSelfies, "rescored": rescored]
         }
         return checks
     }
@@ -816,7 +854,9 @@ final class LibraryScan {
                                   done: total, total: total, score: score.score, fields: score.breakdown)
             }
             let shownSet = Set(ordered)
-            for id in gazeRescored where !heldSet.contains(id) && shownSet.contains(id) {
+            // Rescored by the gaze rest point, the frown line, or both: sent once.
+            let rescoredIds = gazeRescored + frownRescored.filter { !gazeRescored.contains($0) }
+            for id in rescoredIds where !heldSet.contains(id) && shownSet.contains(id) {
                 guard let score = matchScores[id] else { continue }
                 controller?.sendToWeb(["type": "onGalleryMatchFound", "payload": storedPayload(id, score, rescored: true)])
             }
@@ -879,6 +919,9 @@ final class LibraryScan {
             summary["gazeRestPitch"] = twoPlaces(rest.pitch)
         }
         summary["gazeRescored"] = gazeRescored.count
+        summary["frownBaseline"] = frownBaseline
+        summary["frownLine"] = frownLine
+        summary["frownRescored"] = frownRescored.count
         summary["blurDropped"] = blurDropped.count
         summary["blurBaseline"] = blurBaseline
         summary["sensitive"] = sensitiveSkipped

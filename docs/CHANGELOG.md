@@ -85,6 +85,36 @@ has two configurations, Sandbox and Production, with a shared scheme each.
 - **Landscape photos are left out.** Behind `portraitOnly`: a photo wider
   than it is tall is skipped from its library record, before it loads, as
   panoramas already were.
+- **A selfie taken from over 90 cm away is Tier B.** Behind `tooFarDemotes`:
+  a full-length mirror shot whose legs went unseen, or a photo from across a
+  room, counted as a selfie and could be pre-selected over close selfies. It
+  stays in the grid but is never pre-selected while a Tier A selfie is there.
+  Kept selfies on saved scans: median 35 cm, 90% within 79 cm.
+- **The frown is judged against the shopper's own brows.** Behind
+  `frownRelativeEnabled`: when the scan ends, the usual frown reading over
+  the close selfies (at least 5, within 60 cm) sets the line at that + 0.15,
+  never under 0.25 and always from 0.60; selfies under it are rescored
+  without the frown cap and sent again (`rescored`). For a shopper whose
+  brows sit low it stops every selfie losing points; for everyone else the
+  line stays at 0.25. Replayed on 20 saved scans: no pick changed. The
+  summary and the scan report gain `frownBaseline`, `frownLine` and the
+  rescored selfies.
+
+---
+
+## [1.3.15] — 2026-11-04
+
+**Mobile iOS only.** The npm package is unchanged. **Controller: no update
+needed.** Page change only.
+
+### Changed
+
+- **With Reduce Motion on, the building screen fades between the photos.**
+  The sliding strip is switched off when the phone asks for reduced motion,
+  so the screen stood still for the whole build and read as frozen. It now
+  shows one chosen photo at a time, fading to the next every 3.5 seconds;
+  without Reduce Motion it slides as before, and the failure screen still
+  stands still. Behind `BUILDING_FADE_WHEN_REDUCED_MOTION`.
 
 ---
 

@@ -105,7 +105,9 @@ Intro ─> Gender* ─> Height** ─> Selfie ─> Searching ─┬─> Picker �
 9. **Camera fallback** — only when the scan matched **nothing at all**, the user
    photographs themselves three times (front, side, selfie). Those skip matching.
 10. **Building** — the photos upload, the Muse is requested, and a websocket
-   reports progress until the build settles.
+   reports progress until the build settles. The chosen photos slide past
+   meanwhile; with the phone's Reduce Motion on, they fade one into the next
+   instead (`BUILDING_FADE_WHEN_REDUCED_MOTION`).
 11. **Preview** — the finished Muse's rendered views, in a carousel.
 
 ---
@@ -1068,6 +1070,16 @@ Every release has its own address, for example
 - **The page reports its version** in the `WEB_READY` message (`version`), and the
   reference host logs it.
 - **Each release says whether `ViewController.swift` needs updating.**
+
+### 1.3.15 — 4 November 2026
+
+**Controller:** no update needed. Page change only.
+
+**Flow**
+
+- With the phone's Reduce Motion on, the building screen shows one chosen
+  photo at a time, fading to the next, instead of a strip that stood still.
+  Behind `BUILDING_FADE_WHEN_REDUCED_MOTION`.
 
 ### 1.3.14 — 3 November 2026
 

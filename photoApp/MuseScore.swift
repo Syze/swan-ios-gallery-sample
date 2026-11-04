@@ -664,7 +664,10 @@ struct MuseScore {
             // Already named when it was the detail group's lowest signal.
             let eyesWhy = String(format: "eyes %.0f px apart", gates.eyeSpacingOriginal ?? 0)
             if eyesTooSmall, !reasons.contains(eyesWhy) { reasons.append(eyesWhy) }
-            if filter == nil { tier = t >= V.tierALine && !eyesTooSmall ? "A" : "B" }
+            // Not an arm's-length selfie — see `tooFarDemotes`.
+            let tooFar = V.tooFarDemotes && (cameraCm ?? 0) > V.tooFarCm
+            if tooFar { reasons.append(String(format: "camera %.0f cm away", cameraCm ?? 0)) }
+            if filter == nil { tier = t >= V.tierALine && !eyesTooSmall && !tooFar ? "A" : "B" }
             wideEyesV2 = wideEyes
         } else if let body {
             // Body score (v2).
@@ -726,9 +729,33 @@ struct MuseScore {
         copy.value = zip(V.scoreWeightsV2, copy.parts).reduce(Float(1)) { $0 * pow($1.1.value, $1.0.weight) }
         // A Tier B over the line was held there by the eye spacing, which stands.
         let spacingHeld = tier == "B" && value >= V.tierALine
-        copy.tier = copy.value >= V.tierALine && !spacingHeld ? "A" : "B"
+        // So is one taken from too far away, whatever the new score — see `tooFarDemotes`.
+        let farHeld = V.tooFarDemotes && (readings["cameraCm"] ?? 0) > Double(V.tooFarCm)
+        copy.tier = copy.value >= V.tierALine && !spacingHeld && !farHeld ? "A" : "B"
         copy.readings["gazeRestYaw"] = twoPlaces(rest.yaw)
         copy.readings["gazeRestPitch"] = twoPlaces(rest.pitch)
+        return copy
+    }
+
+    /// The same selfie with its frown judged against the shopper's own line (see `frownRelativeEnabled`):
+    /// a frown under it no longer caps expression. Nil when it was not capped by a frown.
+    func refrowned(line: Float) -> MuseScore? {
+        typealias V = ViewController
+        guard filter == nil, body == nil, tier != nil, let brow = expression?.browDown, brow >= V.frownLimit, brow < line,
+              let index = parts.firstIndex(where: { $0.name == "expression" }) else { return nil }
+        let frownWhy = String(format: "frown %.2f", brow)
+        var copy = self
+        let kept = (signals["expression"] ?? []).filter { $0.why != frownWhy }
+        copy.signals["expression"] = kept
+        copy.signalHows[frownWhy] = nil
+        copy.reasons.removeAll { $0 == frownWhy }
+        copy.parts[index].value = kept.map(\.value).min() ?? 1
+        copy.value = zip(V.scoreWeightsV2, copy.parts).reduce(Float(1)) { $0 * pow($1.1.value, $1.0.weight) }
+        // A Tier B over the line was held there by the eye spacing or the distance, which stand.
+        let spacingHeld = tier == "B" && value >= V.tierALine
+        let farHeld = V.tooFarDemotes && (readings["cameraCm"] ?? 0) > Double(V.tooFarCm)
+        copy.tier = copy.value >= V.tierALine && !spacingHeld && !farHeld ? "A" : "B"
+        copy.readings["frownLine"] = twoPlaces(line)
         return copy
     }
 

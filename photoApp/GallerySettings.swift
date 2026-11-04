@@ -195,6 +195,10 @@ extension ViewController {
     /// and the focal length. A photo with no camera data is assumed `assumedFocal35mm`.
     static let tooCloseGateEnabled = true
     static let tooCloseCm: Float = 25
+    /// Camera-to-face over `tooFarCm` is not an arm's-length selfie (a mirror shot, a photo from
+    /// across a room): Tier B, shown but never pre-selected over a Tier A.
+    static let tooFarDemotes = true
+    static let tooFarCm: Float = 90
     static let irisMm: Float = 11.7
     static let eyeSpacingMm: Float = 63
     static let assumedFocal35mm: Float = 30
@@ -359,6 +363,13 @@ extension ViewController {
     static let frownLimit: Float = 0.25
     /// A frown's cap on expression; other caps use `expressionCapped`.
     static let frownCap: Float = 0.6
+    /// At the scan's end the frown is judged against the shopper's own brows: from their usual reading
+    /// (median over close selfies) + `frownOverUsual`, never under `frownLimit`, always from `frownCeiling`.
+    static let frownRelativeEnabled = true
+    static let frownOverUsual: Float = 0.15
+    static let frownCeiling: Float = 0.60
+    static let frownBaselineMin = 5
+    static let frownBaselineMaxCm: Float = 60
     /// Eyes-wide reading from which expression is capped and `wideEyes` is sent; the
     /// page pre-selects such a selfie only when no other Tier A selfie is left.
     static let wideEyesLine: Float = 0.05

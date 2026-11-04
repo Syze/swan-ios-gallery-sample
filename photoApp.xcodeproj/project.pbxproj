@@ -198,7 +198,7 @@
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 12;
-				DEVELOPMENT_TEAM = N4TJHV397F;
+				DEVELOPMENT_TEAM = 6W2LQA6VYU;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = photoApp/Info.plist;
 				INFOPLIST_KEY_NSCameraUsageDescription = "We need camera access to take a selfie for photo matching.";
@@ -214,7 +214,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.ios.swann;
+				PRODUCT_BUNDLE_IDENTIFIER = com.ios.swan;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -353,7 +353,7 @@
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 12;
-				DEVELOPMENT_TEAM = N4TJHV397F;
+				DEVELOPMENT_TEAM = 6W2LQA6VYU;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = photoApp/Info.plist;
 				INFOPLIST_KEY_NSCameraUsageDescription = "We need camera access to take a selfie for photo matching.";
@@ -369,7 +369,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.ios.swann;
+				PRODUCT_BUNDLE_IDENTIFIER = com.ios.swan;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;

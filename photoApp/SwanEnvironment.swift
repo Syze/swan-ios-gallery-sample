@@ -17,8 +17,8 @@ enum SwanEnvironment {
     /// The Swan page. Must be https: the camera needs a secure context.
     var pageURL: URL {
         switch self {
-        case .sandbox: return URL(string: "https://swan-mobile-web-component.swan.so/v1.3.14/index.html")!
-        case .production: return URL(string: "https://swan-mobile-web-component.swan.so/v1.3.14/index.html")!
+        case .sandbox: return URL(string: "https://swan-mobile-web-component.swan.so/v1.3.15/index.html")!
+        case .production: return URL(string: "https://swan-mobile-web-component.swan.so/v1.3.15/index.html")!
         }
     }
 
