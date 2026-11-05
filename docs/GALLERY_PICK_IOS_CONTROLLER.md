@@ -1,4 +1,4 @@
-# Gallery Pick — iOS controller notes for 1.3.17
+# Gallery Pick — iOS controller notes for 1.3.18
 
 What the native code does on the phone, what it is built from, how each part
 is licensed, and what leaves the device. Companion to `CHANGELOG.md` and
@@ -185,7 +185,16 @@ during the scan.
 | `scanReport` in `SwanEnvironment.swift` | set | nil | Posts one JSON report per scan to Swan's scan ingest (`devphotoingest.api.swanvision.ai`, with its ingest key, gzipped, retried on server and network errors): each match with its score and readings, the withdrawn matches and why, the end-of-scan checks (usual eye openness, usual sharpness, gaze resting point), the page's picks, the scan summary and the phone model. Photo ids are cut to 8 characters, except `dupGroup`, which carries the full photo identifier. No images, face embeddings, email or tokens; it does hold each photo's face and body measurements (`scoreInputs`) and capture time, so treat it as personal data. |
 
 The console shows errors only: a missing model file, the page not loading,
-a photo that could not be read or served, the results store not saving.
+a photo that could not be read or served, the results store not saving. One
+exception: every session call (the sample's own token minting in
+`SwanSession.swift`) prints one line, with the key cut to 8 characters:
+
+```
+[swan/session] POST https://…/api/session key=pk_xxxxx… -> HTTP 401 {"message":"invalid publishable and secret key pair provided"}
+```
+
+A reply like that one means the key and the session address belong to
+different environments, or the pair was changed on the backend.
 
 The page has review switches of its own in `galleryConstants.ts`:
 `SHOW_SCORE_BADGE` and `SHOW_ID_BADGE` put the score and the first 8

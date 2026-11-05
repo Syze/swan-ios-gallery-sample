@@ -788,7 +788,7 @@ size videos.
 | `error: "several-faces-in-selfie"` | Another person in the selfie, at least a quarter the size of the main face | Selfie screen, retake |
 | `error: "selfie-not-frontal"` | Head turned more than 20° or tilted more than 15° (25° before 1.3.4) | Selfie screen, retake |
 | `error: "no-reference"` | Reference could not be decoded | Selfie screen |
-| `denied: true` | Photo library access refused | A screen of its own, with *Open Settings* |
+| `denied: true` | Photo library access refused | A step guide to Settings (search for the app › Photos › Full Access), with *Open Settings* |
 | `limited: true` | Only selected photos shared | Picker, with an *Add more photos* button that sends `GALLERY_PICK_MORE` |
 | `assetIds: []` | Scan ran, found nothing | Camera fallback |
 
@@ -842,10 +842,12 @@ screen as a shopper sees it mid-load.
 ### The camera-blocked screen
 
 `cameraBlocked` is the one entry that is not a phase of the flow — in a real run
-the overlay sits *over* the camera screen rather than replacing it. Asked for
-here it draws that screen with the overlay forced and **no camera opened**.
+it replaces the camera screen when the camera will not open. Asked for here it
+draws that screen with **no camera opened**. It is a step guide to Settings
+(search for the app › Camera on) with *Open Settings*; the camera-busy variant
+has no Settings path and offers *Try again* instead.
 
-`previewCameraBlocked` picks which of the three messages in `cameraBlockedPage`
+`previewCameraBlocked` picks which of the three variants of `cameraBlockedPage`
 to show, and defaults to `"denied"`:
 
 ```swift
@@ -928,7 +930,7 @@ anything you leave out keeps the gallery's own styling.
 | `style.heading` / `style.subheading` | The two text levels on every screen |
 | `style.button` | Primary buttons, including their **disabled** state — the Build button spends most of its life disabled, so set those two |
 | `logo` | Shown in the flow's header |
-| `appName` | Used in the camera-permission instructions: *Settings › {appName} › Camera*. Defaults to "this app" |
+| `appName` | Written into the camera-off and photo-access-off guides ("Search for {appName} in Settings") and drawn into their Settings mock. Send the app's Home Screen name. Defaults to "this app" |
 | `content` | Wording — see below |
 
 Values are CSS strings, passed through as-is. `"16px"` works; `16` does not.
@@ -971,8 +973,8 @@ The groups, in the order the user meets them:
 | `buildingPage` | Shown while the Muse builds |
 | `previewPage` | The finished carousel |
 | `failedPage` | Upload interrupted, and build failed |
-| `libraryBlockedPage` | Photo access refused |
-| `cameraBlockedPage` | Camera unavailable |
+| `libraryBlockedPage` | Photo access refused: the step guide to Settings |
+| `cameraBlockedPage` | Camera would not open: the step guide, worded by reason |
 
 A misspelled group or name is **ignored silently** — the default renders and
 nothing indicates why. The component logs
@@ -1120,6 +1122,28 @@ Every release has its own address, for example
 - **The page reports its version** in the `WEB_READY` message (`version`), and the
   reference host logs it.
 - **Each release says whether `ViewController.swift` needs updating.**
+
+### 1.3.18 — 5 November 2026
+
+**Controller:** update recommended. It sends the app's Home Screen name as
+`config.appName`, and selfies looking down are ruled out from 5°. Older
+controllers keep working with this page.
+
+**Flow**
+
+- Refusing photo access, or a camera that will not open, now shows a
+  step-by-step guide: "Search for {appName} in Settings", then the Photos or
+  Camera step, with a drawn copy of the iOS Settings page and one *Open
+  Settings* button. The camera guide replaces the camera screen on the
+  selfie, photo and top-up steps; a busy camera offers *Try again* instead.
+
+**Setup**
+
+- `config.appName` is used: send the app's name. New text keys in
+  `libraryBlockedPage` (`step1Text`…`step3Text`, `footerText`) and
+  `cameraBlockedPage` (`headingTitle`, `step1Text`, `step2Text`,
+  `busyHeadingTitle`, `busyStepText`, `unknownHeadingTitle`); see
+  GALLERY_PICK_TEXT_CONFIG.md. Switch `PERMISSION_GUIDES`.
 
 ### 1.3.17 — 5 November 2026
 

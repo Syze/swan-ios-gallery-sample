@@ -35,6 +35,7 @@ final class ViewController: UIViewController {
     /// Brand styling and text, passed to the page as `config`: `style` sets CSS
     /// variables, `content` replaces text. Every key is optional and not validated.
     static let theme: [String: Any] = [
+        "appName": "SWAN",
         "content": [
             "galleryPick": [
                 "introPage": [

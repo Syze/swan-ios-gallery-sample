@@ -22,42 +22,36 @@ onwards; those entries are kept for reference and need nothing on your side.
 
 ## [Unreleased]
 
-**Controller only.** The update replaces every Swift file in `photoApp/` and adds nine new ones (see Code below), and the project
-has two configurations, Sandbox and Production, with a shared scheme each.
+Nothing yet.
 
-### Code
+---
 
-- **The controller is split into smaller files, with the same behaviour.**
-  `ViewController.swift` keeps the settings and the page bridge; the scan,
-  scoring, photo serving and Vision code move to `GallerySettings`,
-  `GalleryScan`, `LibraryScan`, `MuseScore`, `GalleryPhotos`, `FaceVision`
-  and `Helpers`. Copy all of them. Comments are short; repeated code uses
-  shared helpers.
-- **Test tools and switched-off code are removed:** the measurement (eval)
-  mode, the per-photo console logs, the knee rule, the start-of-flow gaze
-  resting point and other options that were off. The console shows errors
-  only.
-- **Sandbox and production builds from the same code.** Two build
-  configurations, Sandbox and Production (Debug and Release are gone), with a
-  scheme each: `photoApp Sandbox` and `photoApp Production`.
-  `SwanEnvironment.swift` holds what differs per build: the page URL, the
-  session URL, the key and the scan report. Production values are
-  placeholders, and a Release build warns until they are filled in.
-- **The scan report is on in sandbox builds only.** Each scan posts one JSON
-  report to Swan's scan ingest (`devphotoingest.api.swanvision.ai`), with its
-  ingest key, gzipped, and retried on server and network errors: the matches with their readings, the withdrawn matches and why, the
-  page's picks, the summary and, new, the end-of-scan checks (usual eye
-  openness, usual sharpness with the lowest four, the gaze resting point and
-  the selfies it rescored).
-- **`shopDomain` is the development shop, `hm_ie`, in every build** (Sandbox
-  and Production).
-- **The flow's callbacks arrive in `handleCallback(_:_:)`**, one case per
-  callback with what it carries.
-- **`kneeUp` and `summary.kneeLength` are no longer sent**; they were always
-  false and 0. Everything else sent to the page is unchanged.
+## [1.3.18] — 2026-11-05
+
+**Mobile iOS only.** The npm package is unchanged. **Controller: update
+recommended.** The update replaces the controller files in `native-samples/`:
+it sends the app's name as `config.appName`, and selfies looking down are
+ruled out from 5°. Older controllers keep working with this page; the
+permission guides then say "this app".
 
 ### Changed
 
+- **Camera-off and photo-access-off screens are step guides.** Behind
+  `PERMISSION_GUIDES`. Refusing photo access, or a camera that will not open,
+  now shows a full screen: a heading, numbered steps ("Search for {appName} in
+  Settings", "Tap Photos", "Choose Full Access" / "Turn on Camera") with a drawn
+  copy of the iOS Settings page, one *Open Settings* button and a privacy line.
+  The camera guide replaces the camera screen on the selfie, photo and top-up
+  steps; a busy camera shows *Try again* instead of Settings. *Try again* is
+  otherwise gone: iOS restarts the app after a permission change. New text keys
+  in `libraryBlockedPage` and `cameraBlockedPage` (see
+  GALLERY_PICK_TEXT_CONFIG.md); the old keys are kept for the older screens.
+- **`config.appName` is used.** It fills `{appName}` in every text and is drawn
+  into the Settings mock. The sample controller sends the bundle's display name.
+- **Sample: the session call is logged.** `SwanSession.swift` prints one
+  console line per token request (address, key cut to 8 characters, HTTP
+  status, reply), so a refused key is visible at once. The sample's own code,
+  not the page.
 - **Selfies looking down are ruled out from 5°.** Behind
   `lookingDownConfirmed`: the eyes 5° or more below their resting point,
   with MediaPipe also reading them looking down (`gazeDown` 0.35 or more), is
@@ -68,36 +62,6 @@ has two configurations, Sandbox and Production, with a shared scheme each.
   reading spares eyes held wide, which read low by angle alone (7.8° and
   5.4°) but 0.31 and 0.25 on `gazeDown`. Replayed on every saved scan, 94
   selfies: the four judged looking down are removed, nothing else.
-- **Selfies with the head tipped 15° or more down or up against the floor
-  are ruled out**, "head down" and "head up". Behind `headLevelGateEnabled`.
-  A head tipped down to a phone held low faces the lens, so every reading
-  against the camera is level, yet the Muse looks down. The head against the
-  floor comes from the phone's own tilt (its gravity reading in the photo),
-  the face's place in the frame and MediaPipe's pitch. A photo without the
-  tilt (an export, a screenshot, another phone's photo) is not judged. On a
-  phone scan of 90 selfies: the selfies kept read −13° to +13°; the clear
-  cases 21° to 42° down and 34° up. `scoreInputs` gains `cameraTilt` and
-  `headVsFloor`.
-- **A photo with the shopper and their reflection is left out.**
-  `sameShopperFacesMax` is now 1: a photo with two or more faces is a group,
-  even when every face is the shopper's (it was up to 3, all the shopper's).
-- **Landscape photos are left out.** Behind `portraitOnly`: a photo wider
-  than it is tall is skipped from its library record, before it loads, as
-  panoramas already were.
-- **A selfie taken from over 90 cm away is Tier B.** Behind `tooFarDemotes`:
-  a full-length mirror shot whose legs went unseen, or a photo from across a
-  room, counted as a selfie and could be pre-selected over close selfies. It
-  stays in the grid but is never pre-selected while a Tier A selfie is there.
-  Kept selfies on saved scans: median 35 cm, 90% within 79 cm.
-- **The frown is judged against the shopper's own brows.** Behind
-  `frownRelativeEnabled`: when the scan ends, the usual frown reading over
-  the close selfies (at least 5, within 60 cm) sets the line at that + 0.15,
-  never under 0.25 and always from 0.60; selfies under it are rescored
-  without the frown cap and sent again (`rescored`). For a shopper whose
-  brows sit low it stops every selfie losing points; for everyone else the
-  line stays at 0.25. Replayed on 20 saved scans: no pick changed. The
-  summary and the scan report gain `frownBaseline`, `frownLine` and the
-  rescored selfies.
 
 ---
 
@@ -156,22 +120,52 @@ and does the same there.
 
 ## [1.3.16] — 2026-11-04
 
-**Mobile iOS only.** **Controller: update recommended** for the two new socket
-callbacks in `handleCallback`; older controllers work unchanged.
+**Mobile iOS only.** The npm package is unchanged. **Controller: update
+recommended** for the two new socket callbacks in `handleCallback`; older
+controllers work unchanged.
 
 ### Changed
 
+- **Bridge callback events are named after the callback.** The PostHog event for a
+  callback sent to the host is now `<shopDomain>/bridge/<callbackName>` (e.g.
+  `hm_ie/bridge/onMuseEnd`) instead of `<shopDomain>/bridge/callback_sent`; the
+  properties are unchanged. Update any PostHog filter on `callback_sent`.
 - **A socket timeout checks the user's profile before failing.** After 10
-  minutes with no final answer, the page asks `GET /user/profile`. If it says
-  this build's Muse was made (`isMuseGenerated` is `"success"` for the same
-  `museId`), the flow goes on to the Muse (`onMuseEnd` reports `ready`, with
-  `data.via: "profile"`); otherwise the timeout error shows as before.
-- **Two new callbacks for the build socket:** `onMuseSocketOpen` when it
-  connects, and `onMuseSocketClose` when it closes, with the close `code`,
-  `reason`, `wasClean`, and `early` when it closed before the build finished.
-  `onMuseEnd` and `onError` are unchanged.
-- **The building screen's strip no longer flashes** on iPhone. Same look; the
-  Reduce Motion fade is unchanged.
+  minutes with no final answer, the page calls `GET /user/profile` with the
+  token. If `isMuseGenerated` is `"success"` and its `museId` is this build's,
+  the flow goes on to the Muse images (`onMuseEnd` reports `ready`, with
+  `data.via: "profile"`); otherwise the timeout error shows as before. A
+  dropped or early-closed socket is unchanged. Events: `api_profile`, then
+  `muse_profile_check` and `muse_profile_ready`, `muse_profile_not_ready` or
+  `muse_profile_check_failed`.
+- **The build socket reports its own open, close and error.** Two new
+  callbacks, `onMuseSocketOpen` and `onMuseSocketClose` (with the close `code`,
+  `reason`, `wasClean`, and `early` when it closed before the build settled),
+  and three PostHog events, `<shopDomain>/gallery/muse_socket_open`,
+  `muse_socket_close` and `muse_socket_error`. For those moments they replace
+  the `api_socket` records; requests, frames and the build's outcome stay on
+  `api_socket`. `onMuseEnd` and `onError` are unchanged. The controller's
+  `handleCallback` lists the two new cases.
+- **the building screen's strip no longer flashes.** On the phone the
+  strip flashed once every loop (a blank frame at the restart) and again
+  every ~10 seconds as it slid, the second too brief for a screen recording.
+  Both came from how iPhone WebKit draws a wide moving layer: a soft-edge
+  mask over it, and repainting it in 512 px tiles as it moves. The edges are
+  now two fixed overlays, and each photo draws on its own layer, so the
+  moving strip has nothing to repaint. Same look; the Reduce Motion fade is
+  unchanged.
+- **the per-photo events say where the photo came from.**
+  `photo_selected`, `photo_deselected`, `photo_analysed`, `photo_rejected`
+  and `photo_not_original` gain `source`: `camera` for a photo taken in the
+  flow, `library` for one from the library. A camera photo never has an
+  original and is uploaded as its JPEG, so `photo_not_original` with
+  `camera` is expected; with `library` it is worth looking into.
+- **every gallery event carries `purpose`**, one line saying what the
+  event is for, from a table in `galleryAnalytics.ts`. A reader of the raw
+  events needs no key.
+- **one event per Live Photo video.** `paired_video_uploaded` with
+  `assetId`, `uploaded`, `bytes` and `ms`, beside the run's
+  `paired_videos_uploaded` count.
 
 ---
 
@@ -199,9 +193,13 @@ work unchanged.
 
 ### Added
 
-- **The controller tells the page when a sandbox build's scan report is
-  stored:** `onGalleryScanReportStored { id, photos }`. No callback reaches
-  the host, and older pages ignore the message.
+- **A stored scan report is linked to the user in PostHog.** When Swan's scan
+  ingest stores a sandbox build's report, the controller sends the page
+  `onGalleryScanReportStored { id, photos }`, and the gallery records the
+  PostHog event `<shopDomain>/gallery/scan_report_stored` with the user's email,
+  its run id, the `scanReportId` and the photo count. The report itself still
+  carries no email. No callback reaches the host. Older pages ignore
+  the message.
 
 ---
 

@@ -25,7 +25,7 @@ config.content.galleryPick = {
 }
 ```
 
-That's it. **77 names**: 69 across the 14 pages, plus 8 shared buttons and notes. Two of the 69 are optional overrides for generated headings (see §4).
+That's it. **88 names**: 80 across the 14 pages, plus 8 shared buttons and notes. Two of the 69 are optional overrides for generated headings (see §4).
 
 **Every value is plain text.** No codes, no placeholders, no formatting rules.
 
@@ -464,31 +464,47 @@ The last two cover **a Muse build that failed**.
 
 ### `libraryBlockedPage`
 
-Shown whenever someone refuses photo-library access.
+Shown whenever someone refuses photo-library access: a heading, three numbered
+step cards with a drawn copy of iOS Settings, *Open Settings*, and a footer line.
+`{appName}` is replaced with `config.appName` (default "this app"). The labels
+inside the drawn Settings page (Photos, None, Full Access) are fixed.
 
 | Name | Current text |
 |---|---|
-| `headingTitle` | We can't see your photos. |
-| `subHeadingTitle` | Allow photo library access in your device settings, then try again. |
-| `bodyText` | Swan needs access to your photo library to find pictures of you. Nothing is uploaded — the matching happens on your phone. |
+| `headingTitle` | Allow photo access. |
+| `step1Text` | Search for {appName} in Settings. |
+| `step2Text` | Tap Photos. |
+| `step3Text` | Choose Full Access. |
+| `footerText` | The search runs on your phone. Nothing leaves it until you approve it. |
+| `subHeadingTitle` | Allow photo library access in your device settings, then try again. *(older screen only, `PERMISSION_GUIDES = false`)* |
+| `bodyText` | Swan needs access to your photo library to find pictures of you. Nothing is uploaded — the matching happens on your phone. *(older screen only)* |
 
 ---
 
 ### `cameraBlockedPage`
 
-An overlay inside the camera frame. Which line shows depends on why the camera failed.
+Replaces the camera screen when the camera will not open. Same step-guide layout
+as `libraryBlockedPage`; the heading follows the reason. Denied and unknown show
+the two steps, the drawn Settings page and *Open Settings*; busy shows one step
+and *Try again*. `{appName}` is replaced with `config.appName`.
 
 | Name | Current text |
 |---|---|
-| `deniedText` | Camera access is off for this app. |
-| `busyText` | The camera is in use by another app. Close it, then try again. |
-| `unknownText` | We couldn't open the camera. |
+| `headingTitle` | Turn on camera access. |
+| `step1Text` | Search for {appName} in Settings. |
+| `step2Text` | Turn on Camera. |
+| `busyHeadingTitle` | The camera is busy. |
+| `busyStepText` | Close the app that is using the camera, then come back. |
+| `unknownHeadingTitle` | We couldn't open the camera. |
+| `deniedText` | Camera access is off for this app. *(older in-frame box only, `PERMISSION_GUIDES = false`)* |
+| `busyText` | The camera is in use by another app. Close it, then try again. *(older box only)* |
+| `unknownText` | We couldn't open the camera. *(older box only)* |
 
 ---
 
 ## 5. What stays in the code
 
-The flow holds about 130 strings. 77 are configurable; the rest stay put, each for a
+The flow holds about 140 strings. 88 are configurable; the rest stay put, each for a
 reason. Nothing here is an oversight — ask and any row can be opened up later.
 
 | What stays | Example | Why |
@@ -627,14 +643,19 @@ sentence with your own. See §4.
         "failedSubHeadingTitle": "Something went wrong building your Muse. Your photos are safe."
       },
       "libraryBlockedPage": {
-        "headingTitle": "We can't see your photos.",
-        "subHeadingTitle": "Allow photo library access in your device settings, then try again.",
-        "bodyText": "Swan needs access to your photo library to find pictures of you. Nothing is uploaded — the matching happens on your phone."
+        "headingTitle": "Allow photo access.",
+        "step1Text": "Search for {appName} in Settings.",
+        "step2Text": "Tap Photos.",
+        "step3Text": "Choose Full Access.",
+        "footerText": "The search runs on your phone. Nothing leaves it until you approve it."
       },
       "cameraBlockedPage": {
-        "deniedText": "Camera access is off for this app.",
-        "busyText": "The camera is in use by another app. Close it, then try again.",
-        "unknownText": "We couldn't open the camera."
+        "headingTitle": "Turn on camera access.",
+        "step1Text": "Search for {appName} in Settings.",
+        "step2Text": "Turn on Camera.",
+        "busyHeadingTitle": "The camera is busy.",
+        "busyStepText": "Close the app that is using the camera, then come back.",
+        "unknownHeadingTitle": "We couldn't open the camera."
       }
     }
   }
