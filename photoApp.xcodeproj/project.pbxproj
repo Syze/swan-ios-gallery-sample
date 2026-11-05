@@ -197,10 +197,11 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 12;
+				CURRENT_PROJECT_VERSION = 37;
 				DEVELOPMENT_TEAM = 6W2LQA6VYU;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = photoApp/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = SWAN;
 				INFOPLIST_KEY_NSCameraUsageDescription = "We need camera access to take a selfie for photo matching.";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "We need access to your photos to find photos of you.";
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
@@ -352,10 +353,11 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 12;
+				CURRENT_PROJECT_VERSION = 37;
 				DEVELOPMENT_TEAM = 6W2LQA6VYU;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = photoApp/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = SWAN;
 				INFOPLIST_KEY_NSCameraUsageDescription = "We need camera access to take a selfie for photo matching.";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "We need access to your photos to find photos of you.";
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;

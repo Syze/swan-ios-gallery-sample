@@ -33,8 +33,8 @@ enum SwanEnvironment {
     /// The sample's API key. A shipped app mints tokens on its own server and ships no key.
     var publishableKey: String {
         switch self {
-        case .sandbox: return "sw_pk_82ea4cb0719240c1a07c559eda5924a0"
-        case .production: return "sw_pk_82ea4cb0719240c1a07c559eda5924a0"
+        case .sandbox: return "sw_pk_77e0eaa18bdc4520be45bf2a0a2abf71"
+        case .production: return "sw_pk_77e0eaa18bdc4520be45bf2a0a2abf71"
         }
     }
 

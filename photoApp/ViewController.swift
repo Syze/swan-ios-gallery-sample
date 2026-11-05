@@ -21,7 +21,7 @@ final class ViewController: UIViewController {
 
     /// Your shop's id, the same for every build, and the shopper's gender: "male" or "female" skips the
     /// flow's gender screen; anything else, or empty, shows it.
-    static let shopDomain = "hm_ie"
+    static let shopDomain = "swantestflight"
     static let userGender = ""        // "male" | "female"
 
     /// Optional height in cm (a number or a string). Between 152 and 213 the height
