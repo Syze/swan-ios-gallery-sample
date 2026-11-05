@@ -16,6 +16,9 @@ enum SwanSessionConfig {
     /// A token this close to expiry counts as gone, so a scan does not start on a
     /// token that dies during the upload.
     static let expiryMargin: TimeInterval = 60
+    /// A token with less than this left when the page (re)loads is minted again first, so a whole
+    /// run (scan, upload, a build waited on for up to twenty minutes) fits inside it.
+    static let renewMargin: TimeInterval = 50 * 60
 }
 
 // MARK: - Session

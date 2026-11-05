@@ -445,9 +445,13 @@ Two different problems share this page.
 | `unusableText` | Some photos wouldn't load. Picking different ones usually helps. |
 | `failedHeadingTitle` | We couldn't finish. |
 | `failedSubHeadingTitle` | Something went wrong building your Muse. Your photos are safe. |
+| `resumedSubHeadingTitle` | We couldn't finish your Muse. Let's start again from your selfie. |
+| `resumedButtonText` | Start over |
 
 The first three cover **photos that wouldn't upload** — `pausedSubHeadingTitle` on the
-first failure, `unusableText` after a retry has also failed.
+first failure, `unusableText` after a retry has also failed. The last two replace the
+muse-failure line and button when the build had been resumed after a page reload: its
+photos are gone with the reload, so the button starts the flow over.
 
 The last two cover **a Muse build that failed**.
 

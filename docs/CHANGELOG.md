@@ -101,6 +101,59 @@ has two configurations, Sandbox and Production, with a shared scheme each.
 
 ---
 
+## [1.3.17] — 2026-11-05
+
+**Mobile iOS only.** The npm package is unchanged. **Controller: update
+recommended.** The update replaces the controller files in `native-samples/`:
+the screen stays on during upload and build, and the new `GALLERY_TOKEN_EXPIRED`
+message is answered. Older controllers keep working with this page; without the
+update the screen can sleep mid-build and a refused token is not renewed.
+
+### Changed
+
+- **The screen stays on while photos upload and the Muse builds.** The
+  controller disables the idle timer from `onUploadStart` to `onMuseEnd`,
+  `onComplete` or `onError`, and on `GALLERY_RESET`, when the app leaves the
+  foreground, and when the page's process is lost.
+- **Page: the build wait survives a dropped socket and a backgrounded app.**
+  When the socket ends without a verdict (timeout, dropped, could not open,
+  or the app came back to the foreground), the page asks `/user/profile`:
+  `isMuseGenerated` `success` finishes, `failed` fails, `in-progress` reopens
+  the socket and keeps waiting, for up to 20 minutes from the moment the
+  server accepted the build. Before, only a timeout checked the profile and a
+  dropped socket failed at once. Behind `BUILD_RETRY_ON_DROP`,
+  `BUILD_RECHECK_ON_FOREGROUND` and `BUILD_WAIT_BUDGET_MS`. Events:
+  `muse_socket_retry`, `build_background`, `build_foreground`,
+  `build_wait_exhausted`, `muse_profile_failed`.
+- **Page: a refused token during the build wait is renewed once.** On a 401
+  from `/user/profile` or `/muse/images` the page sends the host
+  `GALLERY_TOKEN_EXPIRED`, waits up to 15 s for a new token to arrive in
+  `RENDER_COMPONENT`, and retries the call once. Behind `TOKEN_RENEW_ON_401`.
+  Events: `token_expired`, `token_renew_requested`, `token_renewed`,
+  `token_renew_failed`. What the host does to get that token is its own:
+  see the sample-app note below.
+- **Page: a build accepted before a reload is resumed.** The page remembers
+  the accepted `museId` (and the photo ids, to show them again) for its
+  session and, after a reload inside the running app within 30 minutes,
+  lands on "Creating your Muse" and checks the profile instead of starting
+  from the intro. Closing the app forgets it; nothing is kept on the device. `onComplete` then carries `resumed: true` with
+  empty ids. If that build then fails, the failure screen says the flow
+  restarts (new text keys `failedPage.resumedSubHeadingTitle` and
+  `resumedButtonText`) and `onRetry` carries `resumed: true`. Behind
+  `RESUME_PENDING_BUILD`. Events: `build_resumed`, `build_resume_set_aside`.
+
+### Sample app
+
+Session handling is the sample's own; a shipped app mints tokens on its server
+and does the same there.
+
+- **A session is renewed before it can run out mid-build.** A token lives an
+  hour. The sample mints a new session when the page (re)loads with under 50
+  minutes left on the token (`SwanSessionConfig.renewMargin`), and on
+  `GALLERY_TOKEN_EXPIRED`, answering with `RENDER_COMPONENT`.
+
+---
+
 ## [1.3.16] — 2026-11-04
 
 **Mobile iOS only.** **Controller: update recommended** for the two new socket

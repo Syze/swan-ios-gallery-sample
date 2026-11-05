@@ -373,7 +373,7 @@ All optional. Height is always centimetres.
 | `onMuseSocketOpen` | The build socket connected. Carries `museId`. |
 | `onMuseEnd` | The build socket answers — **success or failure**. |
 | `onMuseSocketClose` | The build socket closed. Carries `code` (1000 a normal close, 1006 dropped with no close frame), `reason`, `wasClean`, and `early: true` when it closed before the build settled (then `onMuseEnd` reports a failure). |
-| `onComplete` | The run finished successfully. |
+| `onComplete` | The run finished successfully. `resumed: true`, with empty `assetIds` and `photoIds`, when the build was picked up after a page reload (see "Screen lock and background"). |
 | `onCaptureComplete` | The camera fallback finished (fires **instead of** `onComplete`). |
 | `onRetry` | The user acted on the failure screen. |
 | `onError` | Upload or build failed. |
@@ -389,6 +389,7 @@ onComplete({
   museId?: string,
   museStatus?: string,     // "ready", "skipped", or why it did not settle
   museImages?: string,     // JSON array of rendered view URLs — a string, see below
+  resumed?: boolean,       // true when the build was picked up after a page reload; ids are then empty
 })
 ```
 
@@ -411,10 +412,18 @@ onMuseEnd({
 > silence. `data` is also the only place `missingRoles` and `rejectedPhotos` are
 > readable.
 
-> **After 10 minutes with no final answer, the page asks `/user/profile`.** When
-> it reports `isMuseGenerated: "success"` for this same `museId`, the build counts
-> as finished: `onMuseEnd` reports `ready` with `data.via: "profile"` and the
-> Muse images load as usual. Otherwise the timeout error shows as before.
+> **When the socket cannot be trusted, the page asks `/user/profile`.** That is
+> after 10 minutes with no final answer, when the socket drops or could not open,
+> and when the app comes back to the foreground mid-wait. For this same `museId`,
+> `isMuseGenerated: "success"` counts as finished: `onMuseEnd` reports `ready`
+> with `data.via: "profile"` and the Muse images load as usual; `"failed"` shows
+> the failure screen; `"in-progress"` (or no answer) reopens the socket and keeps
+> waiting, for up to 20 minutes from the moment the server accepted the build.
+> Events: `api_profile` (the request and its answer), `muse_profile_check` and one
+> of `muse_profile_ready`, `muse_profile_failed`, `muse_profile_not_ready` or
+> `muse_profile_check_failed`; `muse_socket_retry` each time the socket is
+> reopened; `build_background` / `build_foreground` when the app left and came
+> back mid-wait; `build_wait_exhausted` when the budget ran out.
 
 ```ts
 onImageSelect({ assetId: string, selected: boolean, count: number, email?: string, auto?: true, type?, distance?, score?, rank?, scoreParts?, scorePenalties?, scoreFilter?, scoreInputs? })
@@ -538,6 +547,7 @@ through `window.postMessage`.
 | `GALLERY_CLEAR_CAPTURES` | — | Drop every photo taken in this run |
 | `GALLERY_PICK_MORE` | — | `presentLimitedLibraryPicker`, reply `onGalleryPickedMore` |
 | `GALLERY_RESET` | — | Drop all per-run state |
+| `GALLERY_TOKEN_EXPIRED` | — | The session token was refused (401) during the build wait: mint a new session and send `RENDER_COMPONENT` again with it; the page retries the call once |
 | `OPEN_SETTINGS` | — | `UIApplication.open(settings URL)` |
 | `SCHEME_TEST_RESULT` | `{ ok }` | Log only |
 | `WEB_LOG` | `{ text }` | Print — the only console on device |
@@ -572,6 +582,34 @@ disagree.
 also sent at the start of every scan, and a user who takes a photo and then asks
 iOS for more library photos has to keep it.
 
+### Screen lock and background
+
+The controller keeps the screen on from `onUploadStart` until `onMuseEnd`,
+`onComplete` or `onError` (and on `GALLERY_RESET`), so a locked phone does not
+suspend the page mid-build. If the page is suspended or reloaded anyway, the
+build is not lost: the page remembers a build the server accepted (its `museId`,
+start time and photo ids, for the page's session only) and, after a reload
+inside the running app within 30 minutes, goes straight back to "Creating your
+Muse" with the same photos, asks `/user/profile`, and then shows the preview,
+keeps waiting, or shows the failure screen. Only the build wait is restored,
+and only while the app stays open: closing the app forgets it, and a reload
+before Build was tapped, or during the upload, starts the flow again. Nothing
+is kept on the device. On a resumed build `onComplete` carries `resumed: true`
+and empty ids, and the failure screen says so (`failedPage.resumedSubHeadingTitle`,
+`resumedButtonText`) and starts the flow over; `onRetry` then carries
+`resumed: true`, so an app can take over instead. Events:
+`build_resumed`; `build_resume_set_aside` when a remembered build was ignored
+(too old, or another account's).
+
+A session token lives an hour, and a wait or a resume can cross that. When a
+call during the wait is refused with 401, the page sends `GALLERY_TOKEN_EXPIRED`
+and retries once with the token the next `RENDER_COMPONENT` brings (events:
+`token_expired`, `token_renew_requested`, `token_renewed`,
+`token_renew_failed`). Getting that token is your app's job: the sample mints a
+new session on `GALLERY_TOKEN_EXPIRED`, and also when a page (re)loads with
+under 50 minutes left on the token, but a shipped app does this with its own
+token server.
+
 ### Your app sends
 
 | Message | Payload |
@@ -584,7 +622,7 @@ iOS for more library photos has to keep it.
 | `onGalleryFullImage` | `{ id, dataURI, original, hasVideo? }` or `{ id, error }` |
 | `onGalleryThumbnails` | `{ thumbs: [{ id, dataURI }] }` |
 | `onGalleryPickedMore` | `{ added }` — only when the user actually shared more |
-| `onGalleryScanReportStored` | `{ id, photos }` — sandbox builds only, after Swan's scan ingest stored the scan report. |
+| `onGalleryScanReportStored` | `{ id, photos }` — sandbox builds only, after Swan's scan ingest stored the scan report; the page records it as the PostHog event `<shopDomain>/gallery/scan_report_stored` and nothing else |
 
 ### `onGalleryPhotoAnalysis` — read this one carefully
 
@@ -1055,7 +1093,9 @@ to the host via `GALLERY_CAPTURE_PHOTO` — in memory, never to the library.
 
 **Captured photos do not survive the app.** The in-memory store is cleared on
 `GALLERY_CLEAR_CAPTURES` and on deallocation. A backgrounded app whose web
-content process is killed loses them, and the user has to retake.
+content process is killed loses them, and the user has to retake. A build that
+was already accepted is resumed after such a reload (see "Screen lock and
+background"), but its photos are gone with it, so its Retry can only start over.
 
 **Orphaned uploads.** Photos uploaded for a build that then fails are not
 deleted server-side; there is no delete endpoint yet.
@@ -1081,6 +1121,29 @@ Every release has its own address, for example
   reference host logs it.
 - **Each release says whether `ViewController.swift` needs updating.**
 
+### 1.3.17 — 5 November 2026
+
+**Controller:** update recommended. The screen stays on from upload start to
+build end, and the new `GALLERY_TOKEN_EXPIRED` message is answered with a fresh
+`RENDER_COMPONENT`. Older controllers keep working with this page.
+
+**Flow**
+
+- A build wait survives the phone going to sleep or the app to the background:
+  on return the profile is checked and the socket reopened, for up to 20
+  minutes from when the server accepted the build. A dropped socket no longer
+  fails the build.
+- A build accepted before the page reloaded (inside the running app) is picked
+  up again on "Creating your Muse", with its photos. Closing the app forgets it.
+- A session token refused mid-build is renewed once through the host.
+
+**Setup**
+
+- `onComplete` gains `resumed`; `onRetry` gains `resumed`. New message
+  `GALLERY_TOKEN_EXPIRED` from the page. New text keys
+  `failedPage.resumedSubHeadingTitle` and `resumedButtonText`. See
+  CHANGELOG.md for the events and switches.
+
 ### 1.3.16 — 4 November 2026
 
 **Controller:** update recommended for the two new socket callbacks. Older
@@ -1096,6 +1159,7 @@ controllers keep working.
 
 - New callbacks `onMuseSocketOpen` and `onMuseSocketClose` (with the close
   `code`, `reason`, `wasClean`, `early`). See the table above.
+- Bridge callback events are named `<shopDomain>/bridge/<callbackName>`.
 
 ### 1.3.15 — 4 November 2026
 
@@ -1115,7 +1179,9 @@ Older controllers keep working.
 **Setup**
 
 - `onGalleryScanReportStored { id, photos }`: sent by a sandbox build once
-  Swan's scan ingest has stored its scan report. See the table above.
+  Swan's scan ingest has stored its scan report. The page records it as the
+  PostHog event `<shopDomain>/gallery/scan_report_stored` with the user's
+  email and run id. See the table above.
 
 ### 1.3.13 — 3 November 2026
 

@@ -253,6 +253,9 @@ final class ViewController: UIViewController {
         view.backgroundColor = .systemBackground
         // Started early: the network monitor's first reading takes a moment.
         _ = Self.pathMonitor
+        // The screen is let sleep again whenever the app leaves the foreground.
+        NotificationCenter.default.addObserver(self, selector: #selector(appDidEnterBackground),
+                                               name: UIApplication.didEnterBackgroundNotification, object: nil)
         // A stored scan report's id goes to the gallery page, which records it in PostHog with the user.
         scanReport.onStored = { [weak self] id, photos in
             self?.sendToWeb(["type": "onGalleryScanReportStored", "payload": ["id": id, "photos": photos]])
@@ -361,6 +364,26 @@ final class ViewController: UIViewController {
         ])
     }
 
+    // MARK: - Session renewal (the sample's own; a shipped app does this with its token server)
+
+    /// Mints a new session for the signed-in email when the current token has under
+    /// `SwanSessionConfig.renewMargin` left, so a build wait cannot outlive it. Keeps the old one on failure.
+    func renewSessionIfNeeded() async {
+        guard let until = session?.validUntil, until.timeIntervalSinceNow < SwanSessionConfig.renewMargin else { return }
+        await renewSession(force: false)
+    }
+
+    func renewSession(force: Bool) async {
+        guard let current = session else { return }
+        do {
+            let fresh = try await SwanSessionClient.createSession(email: current.email, name: current.name)
+            fresh.save()
+            session = fresh
+        } catch {
+            print("\u{274c} session renew failed\(force ? "" : " (token near expiry)") — \(error.localizedDescription)")
+        }
+    }
+
     /// Shows the sign-in screen. It stays up until the page is ready, and with a live
     /// session it offers that email and a Continue button.
     func presentSignIn(existing: SwanSession? = nil) {
@@ -377,10 +400,20 @@ final class ViewController: UIViewController {
     }
 
     deinit {
+        NotificationCenter.default.removeObserver(self)
         webView?.configuration.userContentController
             .removeScriptMessageHandler(forName: Self.bridgeName)
         webReadyWatchdog?.cancel()
+        setKeepAwake(false)
     }
+
+    /// Keeps the screen on while photos upload and the Muse builds, so a locked phone does not
+    /// suspend the page mid-way; cleared on every end state and whenever the app leaves the foreground.
+    func setKeepAwake(_ on: Bool) {
+        UIApplication.shared.isIdleTimerDisabled = on
+    }
+
+    @objc private func appDidEnterBackground() { setKeepAwake(false) }
 
     // MARK: - Setup
 
@@ -504,7 +537,8 @@ extension ViewController: WKScriptMessageHandler {
             CaptureStore.removeAll()
             resetScanState()
             webReady = true
-            if session != nil { revealGallery() }
+            // A reloaded page gets a token with enough life left for a build wait.
+            if session != nil { Task { await renewSessionIfNeeded(); revealGallery() } }
 
         case "GALLERY_SCAN_START":
             let filters = payload["payload"] as? [String: Any] ?? [:]
@@ -541,9 +575,14 @@ extension ViewController: WKScriptMessageHandler {
             // The page's console trace. Not printed: it carries request bodies.
             break
 
+        case "GALLERY_TOKEN_EXPIRED":
+            // The page's token was refused mid-build: mint a new session and send it again.
+            Task { await renewSession(force: true); renderGallery() }
+
         case "GALLERY_RESET":
             // A new scan or an abandoned flow: clear everything from the previous run.
             resetScanState()
+            setKeepAwake(false)
 
         case "GALLERY_ANALYSE_PHOTO":
             // The user selected a photo. See analysePhoto(id:).
@@ -583,7 +622,7 @@ extension ViewController: WKScriptMessageHandler {
         switch name {
         case "onUploadStart":
             // Photos are going up: `photoCount`; `background` is true while the user is still picking.
-            break
+            setKeepAwake(true)
         case "onUploadEnd":
             // One file is up or failed (`uploaded`, `kind`, `assetId`); a Live Photo's video reports separately.
             break
@@ -598,10 +637,10 @@ extension ViewController: WKScriptMessageHandler {
             break
         case "onMuseStart":
             // The Muse build was requested: `photoIds`.
-            break
+            setKeepAwake(true)
         case "onMuseEnd":
             // The build settled: `status`, `phase`, `museId`, `message`; `data` holds `missingRoles` and `rejectedPhotos`.
-            break
+            setKeepAwake(false)
         case "onMuseSocketOpen":
             // The build socket connected: `museId`.
             break
@@ -610,10 +649,10 @@ extension ViewController: WKScriptMessageHandler {
             break
         case "onComplete":
             // The end of the flow: `museId`, `museStatus`, server `photoIds` (what POST /muse/build takes), `heightInCm`, `museImages`.
-            break
+            setKeepAwake(false)
         case "onError":
             // `stage` is photos, upload or muse, with `message` and `failedCount`; the page already shows the user an error.
-            break
+            setKeepAwake(false)
         default:
             break
         }
@@ -649,6 +688,7 @@ extension ViewController: WKNavigationDelegate {
     /// The web page's process was killed, usually for memory. Reloaded, but only up to
     /// `maxProcessReloads` times so a page that always runs out of memory stops.
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        setKeepAwake(false)
         guard processReloads < Self.maxProcessReloads else {
             print("\u{1f480} Web content process terminated again — giving up after \(processReloads) reloads")
             pageDidFail("The gallery didn't open. Try again.")
