@@ -19,6 +19,7 @@ final class ScanReport {
     private var picks: [String] = []
     private var droppedWhy: [String: String] = [:]
     private var checks: [String: Any] = [:]
+    private var trail: [[String: Any]] = []
     /// Called on the main queue with the stored report's id and photo count.
     var onStored: ((_ id: String, _ photos: Int) -> Void)?
 
@@ -49,11 +50,15 @@ final class ScanReport {
             "dropped": dropped.map(Self.short),
             "droppedPhotos": droppedPhotos,
             "checks": checks,
+            // Every photo the scan looked at: outcome, the readings behind it, and its
+            // Photos filename. Look a missing photo up here by `file`.
+            "trail": trail,
         ]
         for key in ["error", "denied", "limited", "skipped", "summary"] { report[key] = payload[key] }
         matches = [:]
         droppedWhy = [:]
         checks = [:]
+        trail = []
         picks = []
 
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.pickWait) { [self] in
@@ -82,9 +87,10 @@ final class ScanReport {
     }
 
     /// Why each withdrawn match went and the end-of-scan checks, set just before scan complete.
-    func endOfScan(droppedWhy: [String: String], checks: [String: Any]) {
+    func endOfScan(droppedWhy: [String: String], checks: [String: Any], trail: [[String: Any]] = []) {
         self.droppedWhy = droppedWhy
         self.checks = checks
+        self.trail = trail
     }
 
     /// A match as the page received it, with the id cut to the page's 8-character badge.

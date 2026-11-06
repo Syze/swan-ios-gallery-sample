@@ -142,6 +142,11 @@ final class ViewController: UIViewController {
     /// before body pose (see `matchBeforePose`).
     var lastEarlyNoMatch = false
 
+    /// What the last `matchPerson` measured on the way, for the scan report's per-photo
+    /// trail (see `LibraryScan.trail`). Cleared at the start of each photo; only read
+    /// while a report is being collected.
+    var lastTrace: [String: Any] = [:]
+
     /// A photo's capture date as `yyyy-MM-dd`, for the scan summary. Nil without a date.
     static func captureDay(_ date: Date?) -> String? {
         guard let date else { return nil }

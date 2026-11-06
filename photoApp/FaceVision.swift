@@ -419,8 +419,11 @@ extension ViewController {
         lastBodyRetry = nil
         lastEarlyNoMatch = false
         lastEmbeddings = []
+        lastTrace = [:]
         guard let reference = referenceEmbedding, let recognizer = Self.faceRecognizer,
-              let cgImage = image.cgImage else { return .noFace }
+              let cgImage = image.cgImage else { lastTrace["why"] = "no reference or image"; return .noFace }
+        lastTrace["render"] = "\(cgImage.width)x\(cgImage.height)"
+        lastTrace["orientation"] = "\(image.imageOrientation.rawValue)"
 
         let request = VNDetectFaceRectanglesRequest()
         let handler = VNImageRequestHandler(
@@ -430,7 +433,8 @@ extension ViewController {
         )
         timed("detect") { try? handler.perform([request]) }
 
-        guard let allFaces = request.results, !allFaces.isEmpty else { return .noFace }
+        guard let allFaces = request.results, !allFaces.isEmpty else { lastTrace["why"] = "Vision found no face"; return .noFace }
+        lastTrace["facesFound"] = allFaces.count
 
         // Faces too small beside the largest are bystanders (see `bystanderRatio`):
         // they neither reject the photo nor get a turn at matching.
@@ -440,6 +444,7 @@ extension ViewController {
         let faces = allFaces.filter { $0.boundingBox.width >= mainFaceWidth * Self.bystanderRatio }
             .sorted { $0.boundingBox.width > $1.boundingBox.width }
 
+        lastTrace["facesUsed"] = faces.count
         // Several faces are a group unless every one is the shopper, a mirror shot.
         lastShopperFaces = 1
         if Self.requireSingleFace && faces.count > 1 {
@@ -466,6 +471,9 @@ extension ViewController {
 
         // The widest face in pixels of the loaded render (Vision's boxes are normalised).
         let widest = faces.map { $0.boundingBox.width * CGFloat(cgImage.width) }.max() ?? 0
+        lastTrace["facePx"] = Int(widest)
+        lastTrace["faceYawRad"] = (faces.first?.yaw.map { ($0.doubleValue * 100).rounded() / 100 } as Any?) ?? NSNull()
+        lastTrace["faceBoxCentre"] = (faces.first.map { [($0.boundingBox.midX * 100).rounded() / 100, ($0.boundingBox.midY * 100).rounded() / 100] } as Any?) ?? NSNull()
 
         // A larger render of the same photo, loaded at most once and only if asked
         // for. Network off, so nil when no larger copy is on the phone.
@@ -495,6 +503,7 @@ extension ViewController {
         // enough to clear it, so a photo small in every copy costs nothing extra.
         let widestRatio = faces.map(\.boundingBox.width).max() ?? 0
         if widest < Self.minFacePixels {
+            lastTrace["faceFloor"] = "\(Int(widest))px at the scan render, under \(Int(Self.minFacePixels))"
             guard widestRatio * CGFloat(asset.pixelWidth) >= Self.minFacePixels else { return .faceTooSmall(pixels: Int(widest)) }
             guard let larger = largerRender(), widestRatio * CGFloat(larger.width) >= Self.minFacePixels
             else { return .faceTooSmall(pixels: Int(widest)) }
@@ -530,11 +539,13 @@ extension ViewController {
             quick = score(from: cgImage)
             if let quick {
                 let best = quick.min() ?? 1
+                lastTrace["distanceQuick"] = (Double(best) * 1000).rounded() / 1000
                 if best >= Self.gapCutCeiling && (widest >= Self.fullResFaceBelow || best >= Self.earlyNoMatchSmallFace) {
                     lastEarlyNoMatch = true
                     let unchecked = BodyCheck.unseen(people: 1)
                     let ratio = Self.faceRatio(boxWidth: faces.map(\.boundingBox.width).max() ?? 0, in: cgImage)
                     lastEyeSpacing = nil
+                    lastTrace["why"] = "face too far from the selfie before pose (at or over \(Self.gapCutCeiling))"
                     return .scored(distances: quick, body: unchecked,
                                    type: Self.photoType(faceRatio: ratio, yaw: faces.first?.yaw?.doubleValue, body: unchecked),
                                    museScore: nil)
@@ -548,6 +559,7 @@ extension ViewController {
                                              face: faces.first?.boundingBox) }
         // Each reflection of the shopper has a body too; those are not other people.
         body.shopperFaces = lastShopperFaces
+        lastTrace["body"] = Self.bodyTrace(body)
         // What the body score reads: the render the kept body was found on.
         var bodyObservation = lastBodyObservation
         var bodyImage = cgImage
@@ -556,6 +568,7 @@ extension ViewController {
         // Only the shopper in the photo. The person detector also finds someone with
         // their back to the camera, whom the face gate cannot see.
         if body.hasOthers {
+            lastTrace["why"] = "person detector counted \(body.people) people, \(lastShopperFaces) of them the shopper's face"
             return .otherPeople(body: body)
         }
 
@@ -569,6 +582,8 @@ extension ViewController {
             ? timed("type.eyes") { Self.eyeSpacing(of: widestFace, in: cgImage, handler: handler) }.map { $0 * originalScale }
             : nil
         lastEyeSpacing = eyeSpacing
+        lastTrace["faceRatio"] = (Double(faceRatio) * 1000).rounded() / 1000
+        lastTrace["eyeSpacingPx"] = (eyeSpacing.map { Int($0) } as Any?) ?? NSNull()
         // A selfie has no lower body, so it skips the full-body gate. The same rule
         // as `photoType`, read before the body retry.
         let isSelfie = Self.photoType(faceRatio: faceRatio, eyeSpacing: eyeSpacing, yaw: nil, body: body) == .selfie
@@ -578,12 +593,16 @@ extension ViewController {
             guard body.headSeen, body.lowerJoints >= 1,
                   let quick = quick ?? score(from: cgImage), (quick.min() ?? 1) < Self.matchThreshold,
                   let larger = largerRender()
-            else { return .notFullBody(body: body) }
+            else {
+                lastTrace["why"] = "head seen \(body.headSeen), lower joints \(body.lowerJoints), no retry (face distance over the cut or no larger render)"
+                return .notFullBody(body: body)
+            }
             var again = timed("pose") { bodyCheck(in: larger, orientation: .up, face: faces.first?.boundingBox) }
             again.shopperFaces = lastShopperFaces
             lastBodyRetry = again.isHeadToToe
-            if again.hasOthers { return .otherPeople(body: again) }
-            guard again.isHeadToToe else { return .notFullBody(body: body) }
+            lastTrace["bodyRetry"] = Self.bodyTrace(again)
+            if again.hasOthers { lastTrace["why"] = "larger render counted \(again.people) people"; return .otherPeople(body: again) }
+            guard again.isHeadToToe else { lastTrace["why"] = "not head to toe even on the larger render"; return .notFullBody(body: body) }
             body = again
             bodyObservation = lastBodyObservation
             bodyImage = larger
@@ -593,6 +612,9 @@ extension ViewController {
         // The photo's type, from inputs already in hand.
         let yaw = faces.first?.yaw?.doubleValue
         let type = Self.photoType(faceRatio: faceRatio, eyeSpacing: eyeSpacing, yaw: yaw, body: body)
+        lastTrace["typeBy"] = type == .selfie ? "no lower joints and face big enough"
+            : body.shoulderSpread != nil ? "shoulder spread \((Double(body.shoulderSpread!) * 1000).rounded() / 1000) (side under \(Self.sideShoulderSpread), three-quarter under \(Self.threeQuarterShoulderSpread))"
+            : "head yaw fallback (no shoulder spread)"
 
         // A small face is re-embedded from the larger render. Only photos past every
         // gate get here; the face box is normalised, so it fits.
@@ -653,6 +675,16 @@ extension ViewController {
             if !caps.why.contains(why) { caps.why.append(why) }
         }
         return caps.why.isEmpty ? nil : caps
+    }
+
+    /// A body check as plain numbers, for the scan report's per-photo trail.
+    static func bodyTrace(_ body: BodyCheck) -> [String: Any] {
+        func r(_ v: CGFloat) -> Double { (Double(v) * 1000).rounded() / 1000 }
+        return ["headSeen": body.headSeen, "lowerJoints": body.lowerJoints, "ankles": body.ankles, "span": r(body.span),
+                "footRoom": r(body.footRoom), "people": body.people, "headToToe": body.isHeadToToe,
+                "shoulderSpread": (body.shoulderSpread.map(r) as Any?) ?? NSNull(),
+                "needs": ["ankles": minAnkles, "span": body.ankles >= 2 ? minBodySpanBothAnkles : minBodySpan,
+                          "footRoom": r(minFootRoom * body.span)]]
     }
 
     // MARK: - Body check

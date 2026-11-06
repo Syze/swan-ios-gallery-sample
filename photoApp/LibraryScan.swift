@@ -111,6 +111,34 @@ final class LibraryScan {
     private var coverFacts: [String: Int] = [:]
     // Skipped from the library record alone — see `shapeReject`.
     private var skippedShape = 0
+
+    // One entry per photo the scan looked at, saying what happened to it and the
+    // readings behind it, for the scan report (test builds only: see `ScanReport.url`).
+    // The page and production never see it. Filenames are added at the end.
+    private let tracing = ScanReport.url != nil
+    private var trail: [String: [String: Any]] = [:]
+    /// Records what happened to `asset`. A later call for the same photo replaces the
+    /// outcome but keeps what was noted before, so a late verdict adds to the picture.
+    private func note(_ asset: PHAsset, _ outcome: String, _ extra: [String: Any] = [:]) {
+        guard tracing else { return }
+        var entry = trail[asset.localIdentifier] ?? [
+            "px": "\(asset.pixelWidth)x\(asset.pixelHeight)",
+            "taken": asset.creationDate.map { ISO8601DateFormatter().string(from: $0) } ?? "",
+        ]
+        entry["outcome"] = outcome
+        for (key, value) in extra { entry[key] = value }
+        trail[asset.localIdentifier] = entry
+    }
+    /// `note` for a photo `matchPerson` just ran: its outcome with everything it measured.
+    private func noteExamined(_ asset: PHAsset, _ outcome: String, _ extra: [String: Any] = [:]) {
+        guard tracing else { return }
+        var fields = controller?.lastTrace ?? [:]
+        fields["shopperFaces"] = controller?.lastShopperFaces ?? 1
+        if let retry = controller?.lastBodyRetry { fields["bodyRetryHeadToToe"] = retry }
+        if controller?.lastLoadLocalCopy == true { fields["fromSmallLocalCopy"] = true }
+        fields["fromICloud"] = controller?.lastLoadFromCloud ?? false
+        note(asset, outcome, fields.merging(extra) { _, new in new })
+    }
     // No-matches decided before body pose — see `matchBeforePose`.
     private var earlyNoMatch = 0
     private var memoryPeak: Int
@@ -256,6 +284,7 @@ final class LibraryScan {
         guard let store, let record = store.record(for: asset) else { return false }
         func decided() -> Bool {
             storeDecided += 1
+            note(asset, "store:\(record.verdict.rawValue)", ["why": "decided by an earlier scan's stored verdict, not looked at again; clear the scan store to re-test"])
             return true
         }
         switch record.verdict {
@@ -282,6 +311,7 @@ final class LibraryScan {
             }
             guard best >= ViewController.matchThreshold else { return false }
             noMatch += 1
+            note(asset, "store:noMatch", ["distance": twoPlaces(best), "why": "stored face vector too far from this selfie (cut \(ViewController.matchThreshold))"])
             scoredDistances.append(best)
             if ViewController.ownPhotoKeepEnabled, best < ViewController.gapCutCeiling,
                let index = distances.firstIndex(of: best), index < record.vectors.count {
@@ -313,27 +343,32 @@ final class LibraryScan {
         switch outcome {
         case .noFace:
             noFace += 1
+            noteExamined(asset, "noFace")
             remember(asset, .noFace)
 
         case .group(let faceCount):
             groupSkipped += 1
+            noteExamined(asset, "group", ["why": "\(faceCount) faces and not all the shopper's"])
             // Four or more faces, or a face that could not be embedded,
             // is a group whoever the shopper is; two or three faces are
             // a group only against this selfie, so their vectors are kept.
             remember(asset, faceCount > ViewController.sameShopperFacesMax || (controller?.lastEmbeddings.isEmpty ?? true) ? .group : .candidate)
 
-        case .faceTooSmall:
+        case .faceTooSmall(let pixels):
             tooSmall += 1
+            noteExamined(asset, "faceTooSmall", ["why": "widest face \(pixels)px, under \(Int(ViewController.minFacePixels)) even after the larger render"])
             remember(asset, .faceTooSmall)
 
         case .otherPeople:
             otherPeople += 1
+            noteExamined(asset, "otherPeople")
             // One face: someone else is in the photo whoever the shopper
             // is. Several faces all the shopper's: only against this selfie.
             remember(asset, (controller?.lastShopperFaces ?? 1) == 1 ? .otherPeople : .candidate)
 
         case .notFullBody(let body):
             notFullBody += 1
+            noteExamined(asset, "notFullBody", ["bodyAtGate": ViewController.bodyTrace(body)])
             // Final once the larger render was tried, or when nothing
             // could trigger that retry. Otherwise a match by a later
             // selfie could still rescue it, so the vectors are kept.
@@ -341,6 +376,11 @@ final class LibraryScan {
 
         case .scored(let distances, let body, let type, let museScore):
             let distance = distances.min()!
+            noteExamined(asset, "scored", ["distance": twoPlaces(distance), "distances": distances.map { twoPlaces($0) },
+                                           "type": type.rawValue, "cut": ViewController.matchThreshold,
+                                           "earlyNoMatch": controller?.lastEarlyNoMatch ?? false,
+                                           "score": (museScore.map { twoPlaces($0.value) } as Any?) ?? NSNull(),
+                                           "isFullBody": body.isHeadToToe])
             // Saved as a candidate first; the final verdicts below overwrite it.
             remember(asset, .candidate)
             // The gap rule sees clean faces only: covered or strained faces
@@ -365,14 +405,17 @@ final class LibraryScan {
             }
 
             if distance >= ViewController.matchThreshold {
+                note(asset, "noMatch", ["why": "face distance \(twoPlaces(distance)) is at or over the cut \(ViewController.matchThreshold)"])
                 noMatch += 1
                 if controller?.lastEarlyNoMatch == true { earlyNoMatch += 1 }
                 if let closest = closestNoMatch, closest <= distance {} else { closestNoMatch = distance }
                 if distance - ViewController.matchThreshold <= 0.1 { nearMisses += 1 }
             } else if controller?.isSensitiveContent(image) == true {
                 sensitiveSkipped += 1
+                note(asset, "sensitive")
                 remember(asset, .sensitive)
             } else if let why = unusable {
+                note(asset, "unusableFace", ["why": why])
                 // Before sizing: nothing is fetched for a photo that
                 // will not be shown.
                 unusableFace += 1
@@ -380,7 +423,9 @@ final class LibraryScan {
                 remember(asset, .unusableFace)
             } else if hiddenAtSizing(asset) {
                 // Hidden: its original cannot be sent as it is.
+                note(asset, "hiddenAtSizing", ["why": "matched, but its original could not be sent (too large, unavailable or low data)"])
             } else {
+                note(asset, "matched")
                 matchedIds.append(asset.localIdentifier)
                 let orderFields = ViewController.orderFields(asset: asset, type: type, score: museScore)
                 let scoreFields = museScore.map { $0.breakdown.merging(orderFields) { _, new in new } }
@@ -477,8 +522,9 @@ final class LibraryScan {
 
                 examined += 1
 
-                if ViewController.shapeReject(asset) != nil {
+                if let shape = ViewController.shapeReject(asset) {
                     skippedShape += 1
+                    note(asset, "shape", ["why": shape])
                     return
                 }
 
@@ -537,12 +583,14 @@ final class LibraryScan {
     private func notLoaded(_ asset: PHAsset, n: Int) {
         let note = controller?.lastLoadNote ?? ""
         if note.hasPrefix("in iCloud") { cloudOnly += 1 }
+        self.note(asset, "noImage", ["why": note.isEmpty ? "no copy could be loaded" : note])
         // Judged on its thumbnail or small copy by an earlier scan and
         // still only in iCloud — see `ScanStore`: no test, no download.
         if let store, let record = store.record(for: asset),
            record.verdict == .cloudThumbnail || record.verdict == .cloudSmallCopy {
             storeCloudSkipped += 1
             noImage += 1
+            self.note(asset, "noImage:store", ["why": "iCloud-only, judged on its thumbnail by an earlier scan (\(record.verdict.rawValue)) and not downloaded"])
             return
         }
         // A thumbnail shaped like a selfie or a lone standing person is worth a
@@ -590,9 +638,11 @@ final class LibraryScan {
             } else {
                 cloudLeft += 1
                 noImage += 1
+                self.note(asset, "noImage:cloudCap", ["why": "iCloud-only \(kind) candidate, not downloaded: \(cloudAllowed ? "download cap reached" : "downloads not allowed")", "kind": kind])
             }
             return
         }
+        self.note(asset, "noImage:thumbnail", ["why": "iCloud-only and the thumbnail looks like neither a selfie nor a lone standing person, so it was never downloaded"])
         noImage += 1
         // A thumbnail that failed the shape test fails it next time
         // too; a photo with no thumbnail at all is tried again.
@@ -629,10 +679,12 @@ final class LibraryScan {
             guard arrived else {
                 cloudLeft += 1
                 noImage += 1
+                note(job.asset, "noImage:cloudTimeout", ["why": "iCloud download had not finished when the scan stopped waiting"])
                 continue
             }
             if job.previewRejected {
                 cloudPreviewOut += 1
+                note(job.asset, "cloudPreviewRejected", ["why": job.previewNote])
                 remember(job.asset, .cloudSmallCopy, note: job.previewNote)
                 continue
             }
@@ -642,6 +694,7 @@ final class LibraryScan {
                 guard let image = job.box.result?.image else {
                     cloudFailed += 1
                     cloudFailures[job.box.result?.cloudFailure ?? "other", default: 0] += 1
+                    note(job.asset, "noImage:cloudFailed", ["why": "iCloud download failed: \(job.box.result?.cloudFailure ?? "other")"])
                     noImage += 1
                     return
                 }
@@ -788,6 +841,30 @@ final class LibraryScan {
         return why
     }
 
+    /// The per-photo trail for the report: every photo the scan looked at, with its outcome,
+    /// the readings behind it and its filename in the Photos app (IMG_1234.jpg), so a photo
+    /// the shopper expected can be found and explained. Withdrawn matches say why.
+    /// Test builds only; empty otherwise.
+    private func reportTrail() -> [[String: Any]] {
+        guard tracing else { return [] }
+        let why = droppedWhy()
+        for (id, reason) in why where trail[id] != nil {
+            trail[id]?["outcome"] = "withdrawn"
+            trail[id]?["why"] = reason
+        }
+        let ids = Array(trail.keys)
+        var files: [String: String] = [:]
+        PHAsset.fetchAssets(withLocalIdentifiers: ids, options: nil).enumerateObjects { asset, _, _ in
+            if let name = PHAssetResource.assetResources(for: asset).first?.originalFilename { files[asset.localIdentifier] = name }
+        }
+        return ids.sorted { (trail[$0]?["taken"] as? String ?? "") > (trail[$1]?["taken"] as? String ?? "") }.map { id in
+            var entry = trail[id] ?? [:]
+            entry["id"] = ScanReport.short(id)
+            if let name = files[id] { entry["file"] = name }
+            return entry
+        }
+    }
+
     /// The end-of-scan checks: each one's usual value, its line, and what it withdrew or changed.
     private func reportChecks() -> [String: Any] {
         let short = ScanReport.short
@@ -838,6 +915,8 @@ final class LibraryScan {
         let matchedFirstDate = ViewController.captureDay(matchedDates.max())
         let matchedLastDate = ViewController.captureDay(matchedDates.min())
 
+        let trailEntries = reportTrail()
+
         DispatchQueue.main.async { [self] in
             guard controller?.scanGeneration == generation else { return }
 
@@ -865,7 +944,7 @@ final class LibraryScan {
                 controller?.sendToWeb(["type": "onGalleryMatchFound", "payload": storedPayload(id, score, rescored: false)])
             }
 
-            if ScanReport.url != nil { controller?.scanReport.endOfScan(droppedWhy: droppedWhy(), checks: reportChecks()) }
+            if ScanReport.url != nil { controller?.scanReport.endOfScan(droppedWhy: droppedWhy(), checks: reportChecks(), trail: trailEntries) }
             controller?.sendToWeb(["type": "onGalleryScanComplete",
                                    "payload": ["assetIds": ordered,
                                                // Matches the page may already show that an
