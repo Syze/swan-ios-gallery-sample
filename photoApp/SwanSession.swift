@@ -134,6 +134,11 @@ enum SwanSessionClient {
         let (data, response) = try await URLSession.shared.data(for: request)
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+        #if DEBUG
+        // Debug builds only: the status and the server's message, so a refused key or wrong
+        // environment is visible in the console. Never the body, which carries the token.
+        print("[swan/session] POST \(SwanSessionConfig.sessionURL.absoluteString) -> HTTP \(status) \((json?["message"] as? String) ?? "")")
+        #endif
         guard (200..<300).contains(status),
               let token = json?["sessionToken"] as? String, !token.isEmpty else {
             throw SwanSessionError.server((json?["message"] as? String) ?? "Sign-in failed (HTTP \(status))")

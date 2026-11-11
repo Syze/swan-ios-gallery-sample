@@ -82,6 +82,10 @@ final class LibraryScan {
     private var cloudSelfieCandidates = 0, cloudFullCandidates = 0
     private var cloudStartedSelfie = 0, cloudStartedFull = 0
     private var cloudLeft = 0
+    // The page's bar: each download queued during the local pass extends its total,
+    // and each one settled (landed, rejected or given up) moves it on.
+    private var cloudQueued = 0, cloudSettled = 0
+    private var localDone = 0
     private let cloudAllowed: Bool
     private let cloudCap: Int
     private let cloudQueue: OperationQueue
@@ -230,7 +234,8 @@ final class LibraryScan {
 
     /// Tells the page how far the scan has got, on the main queue.
     private func sendProgress(done: Int) {
-        sendOnMain(["type": "onGalleryScanProgress", "payload": ["done": done, "total": total]])
+        localDone = done
+        sendOnMain(["type": "onGalleryScanProgress", "payload": ["done": done + cloudSettled, "total": total + cloudQueued]])
     }
 
     /// Progress for photo `n`, at most every quarter second and always for the last.
@@ -471,7 +476,7 @@ final class LibraryScan {
                 } else {
                     sendOnMain(["type": "onGalleryMatchFound",
                                 "payload": Self.matchPayload(id: asset.localIdentifier, type: type, isFullBody: body.isHeadToToe,
-                                                             distance: distance, dupGroup: dupGroup, done: n, total: total,
+                                                             distance: distance, dupGroup: dupGroup, done: max(n, localDone) + cloudSettled, total: total + cloudQueued,
                                                              score: museScore?.value, fields: scoreFields)])
                 }
             }
@@ -606,6 +611,7 @@ final class LibraryScan {
                 if kind == "selfie" { cloudStartedSelfie += 1 } else { cloudStartedFull += 1 }
                 let job = CloudJob(asset: asset, n: n)
                 cloudJobs.append(job)
+                cloudQueued += 1
                 job.group.enter()
                 cloudQueue.addOperation { [weak controller = self.controller, cloudFullInFlight = self.cloudFullInFlight] in
                     // Small copy first; the full one only for a lone person.
@@ -676,6 +682,9 @@ final class LibraryScan {
                 let step = min(2, max(0, hardDeadline.timeIntervalSinceNow))
                 arrived = job.group.wait(timeout: .now() + step) == .success
             }
+            // Settled either way below; the bar moves on whatever became of the download.
+            cloudSettled += 1
+            defer { sendProgress(done: total) }
             guard arrived else {
                 cloudLeft += 1
                 noImage += 1
@@ -704,8 +713,6 @@ final class LibraryScan {
                 cloudLastDownloaded = landed
                 examine(job.asset, image, n: job.n)
                 memoryPeak = max(memoryPeak, ViewController.residentMB())
-                // Keeps the page's stall timer quiet while this pass runs.
-                sendProgress(done: total)
             }
         }
         // Nothing reads a download that lands after the deadline: the jobs
@@ -930,7 +937,7 @@ final class LibraryScan {
             func storedPayload(_ id: String, _ score: MatchScore, rescored: Bool) -> [String: Any] {
                 Self.matchPayload(id: id, type: score.type, isFullBody: ScanAnalysisStore.analysis(for: id)?.body.isHeadToToe ?? true,
                                   distance: score.distance, dupGroup: dupGroups[id] ?? id, rescored: rescored,
-                                  done: total, total: total, score: score.score, fields: score.breakdown)
+                                  done: total + cloudSettled, total: total + cloudQueued, score: score.score, fields: score.breakdown)
             }
             let shownSet = Set(ordered)
             // Rescored by the gaze rest point, the frown line, or both: sent once.

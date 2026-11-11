@@ -186,11 +186,12 @@ during the scan.
 
 The console shows errors only: a missing model file, the page not loading,
 a photo that could not be read or served, the results store not saving. One
-exception: every session call (the sample's own token minting in
-`SwanSession.swift`) prints one line, with the key cut to 8 characters:
+exception, Debug builds only: every session call (the sample's own token
+minting in `SwanSession.swift`) prints its status and the server's message,
+never the body or the key:
 
 ```
-[swan/session] POST https://…/api/session key=pk_xxxxx… -> HTTP 401 {"message":"invalid publishable and secret key pair provided"}
+[swan/session] POST https://…/api/session -> HTTP 401 invalid publishable and secret key pair provided
 ```
 
 A reply like that one means the key and the session address belong to

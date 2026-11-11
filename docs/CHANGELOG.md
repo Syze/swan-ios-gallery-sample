@@ -22,7 +22,16 @@ onwards; those entries are kept for reference and need nothing on your side.
 
 ## [Unreleased]
 
-Nothing yet.
+**Controller only; the page is unchanged.** The update replaces
+`LibraryScan.swift` in `native-samples/`.
+
+### Changed
+
+- **The progress bar counts iCloud downloads.** Each download queued during
+  the local pass adds one to `total`, and each one settled (landed, rejected
+  or given up at the deadline) adds one to `done`, so the bar reaches 100%
+  only when the last photo is in. Before, it hit 100% at the end of the local
+  pass and sat there through the iCloud pass while the picker stayed locked.
 
 ---
 
@@ -48,10 +57,10 @@ permission guides then say "this app".
   GALLERY_PICK_TEXT_CONFIG.md); the old keys are kept for the older screens.
 - **`config.appName` is used.** It fills `{appName}` in every text and is drawn
   into the Settings mock. The sample controller sends the bundle's display name.
-- **Sample: the session call is logged.** `SwanSession.swift` prints one
-  console line per token request (address, key cut to 8 characters, HTTP
-  status, reply), so a refused key is visible at once. The sample's own code,
-  not the page.
+- **Sample: the session call is logged in Debug builds.** `SwanSession.swift`
+  prints one console line per token request (address, HTTP status, the
+  server's message; never the body or the key), so a refused key is visible
+  at once. The sample's own code, not the page.
 - **Selfies looking down are ruled out from 5°.** Behind
   `lookingDownConfirmed`: the eyes 5° or more below their resting point,
   with MediaPipe also reading them looking down (`gazeDown` 0.35 or more), is
