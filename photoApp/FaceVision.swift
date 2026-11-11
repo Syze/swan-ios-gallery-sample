@@ -406,7 +406,7 @@ extension ViewController {
         expression = expressionResult
         stageMs["score.expression", default: 0] += expressionMs
         var outfit = MuseScore.Outfit(dressy: dressy, busy: busy)
-        let capLabels = Set(Self.garmentCaps.flatMap { $0.labels })
+        let capLabels = Set(Self.garmentCaps.flatMap { $0.labels }).union(Self.looseGarmentLabels)
         outfit.garments = (whole.results ?? []).filter { capLabels.contains($0.identifier) && $0.confidence > 0.1 }
             .map { (label: $0.identifier, confidence: $0.confidence) }
         return (expression, labels, handOnFace, handNearFace, outfit, coverReader, document)
@@ -662,19 +662,23 @@ extension ViewController {
         return .scored(distances: scored, body: body, type: type, museScore: museScore)
     }
 
-    /// The garment caps a photo's labels call for — see `garmentCaps`. Nil with
-    /// the switch off or when no garment reaches its line.
+    /// The garment caps a photo's labels call for — see `garmentCaps` — and whether a loose
+    /// garment was named (`looseGarmentLabels`). Nil with both switches off or nothing hit.
     static func garmentCaps(for outfit: MuseScore.Outfit) -> BodyScore.Caps? {
-        guard garmentCapsEnabled else { return nil }
+        guard garmentCapsEnabled || looseGarmentGateEnabled else { return nil }
         var caps = BodyScore.Caps()
-        for rule in garmentCaps {
+        if looseGarmentGateEnabled,
+           let loose = outfit.garments.filter({ looseGarmentLabels.contains($0.label) && $0.confidence >= looseGarmentLine }).max(by: { $0.confidence < $1.confidence }) {
+            caps.loose = String(format: "%@ %.2f", loose.label, loose.confidence)
+        }
+        for rule in garmentCaps where garmentCapsEnabled {
             guard let hit = outfit.garments.filter({ rule.labels.contains($0.label) && $0.confidence >= rule.line }).max(by: { $0.confidence < $1.confidence })
             else { continue }
             caps.torso = min(caps.torso, rule.torso); caps.legs = min(caps.legs, rule.legs); caps.arms = min(caps.arms, rule.arms)
             let why = String(format: "%@ %.2f", hit.label, hit.confidence)
             if !caps.why.contains(why) { caps.why.append(why) }
         }
-        return caps.why.isEmpty ? nil : caps
+        return caps.why.isEmpty && caps.loose == nil ? nil : caps
     }
 
     /// A body check as plain numbers, for the scan report's per-photo trail.

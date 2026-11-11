@@ -26,6 +26,9 @@ extension ViewController {
     /// On, a match whose face the Muse cannot use (see `MuseScore.filter`) is kept
     /// out of the grid; off, it is shown and ranks last.
     static let unusableFaceDrops = true
+    /// On, a photo taken with the flow's own camera goes through the same gates as a scanned one
+    /// (selfie gates, body score, loose garment), so the camera cannot sidestep the scan's rules.
+    static let captureGatesEnabled = true
 
     /// Match the face before running body pose (the most expensive request), so a
     /// face at or past `gapCutCeiling` skips pose. A small face, which the final
@@ -403,6 +406,16 @@ extension ViewController {
     /// On, MediaPipe's object detector (`BodyObjects`, about 80 ms) lowers body regions
     /// covered by a bag, umbrella, bicycle or chair. Off: no detector, no model load.
     static let objectReadEnabled = true
+    /// On, a photo in a loose outfit is dropped, not capped: a loose garment hides the body,
+    /// so nothing in it can be measured. Loose by label, or by the outline reading wide for the joints.
+    static let looseGarmentGateEnabled = true
+    /// Garments that hide the body whatever the fit says, at or over this confidence.
+    static let looseGarmentLabels: Set<String> = ["gown", "sari", "kimono", "wedding_dress", "cloak", "poncho", "bathrobe", "costume"]
+    static let looseGarmentLine: Float = 0.3
+    /// Fit at or under which a region reads as loose clothing (torso 0.35 is a width 1.25× the
+    /// joints imply). Not when an object covers the region, and legs only when standing with legs apart.
+    static let looseTorsoFit: Double = 0.35
+    static let looseLegsFit: Double = 0.35
     /// Garment caps: labels, confidence line, then the cap on torso, legs and arms.
     /// `suit` has two lines: a sure suit takes the full cap, a likely one a jacket's.
     static let garmentCaps: [(labels: Set<String>, line: Float, torso: Float, legs: Float, arms: Float)] = [

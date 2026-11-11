@@ -22,16 +22,53 @@ onwards; those entries are kept for reference and need nothing on your side.
 
 ## [Unreleased]
 
-**Controller only; the page is unchanged.** The update replaces
-`LibraryScan.swift` in `native-samples/`.
+**Page and controller.** The controller update replaces `LibraryScan.swift`,
+`FaceVision.swift`, `BodyScore.swift`, `GallerySettings.swift`,
+`ScanReport.swift` and `ViewController.swift` in `native-samples/`.
 
 ### Changed
+
+- **Loose clothing is left out.** Behind `looseGarmentGateEnabled`. A front
+  or side photo in an outfit that hides the body is dropped from the scan, as
+  a covered face already is: either the classifier names a gown, sari, kimono,
+  wedding dress, cloak, poncho, bathrobe or costume at 0.3 or more, or the
+  torso or legs read far wider than their joints (fit 0.35 or under, with
+  nothing covering the region, and legs only when standing with legs apart).
+  Counted as `loose garment` in the summary's `unusableGates` and the scan
+  report's trail. Replayed on 612 saved body photos: 32 would go, none Tier A.
+- **Camera photos go through the scan's gates.** Behind `captureGatesEnabled`
+  (controller). A photo taken with the flow's own camera is scored like a
+  scanned one: the selfie gates (looking down, head turned, eyes closed, too
+  dark, …), the body score and the loose-garment gate. A gated photo is answered
+  with `error: "unusable"` and `scoreFilter` naming the gate, and the page shows
+  "That one won't work — looking down. Try again." instead of selecting it.
+  Before, a camera selfie skipped every quality check.
+- **Page: "Take it now" takes several photos per visit.** Behind
+  `TOPUP_MULTI_SHOT`. The camera stays open after a shot. When the phone
+  answers, a good shot fills its marker in the row above the preview
+  ("Side 1/2" → "2/2") and the heading moves to the next missing angle; a
+  wrong angle or an unusable shot shows the usual notice and the marker stays.
+  With every angle covered the page returns to the picker by itself, every
+  shot in the grid and the good ones selected; Back does the same once a shot
+  was taken, waiting for a shot still being checked. The button reads "Take
+  photo". Camera shots are never locked, so the shopper can swap among them. New text keys in `topUpPage`
+  (see GALLERY_PICK_TEXT_CONFIG.md); event `topup_done`. No controller change.
+- **Page: a Tier B front or side can be unticked.** Behind
+  `LOCK_PRESELECTED_BODY_TIER_A_ONLY`. The lock on pre-selected body photos
+  now holds Tier A picks only; a Tier B pick (the best of a weak set, score
+  under 0.70) can be dropped so the shopper can take one with the camera.
 
 - **The progress bar counts iCloud downloads.** Each download queued during
   the local pass adds one to `total`, and each one settled (landed, rejected
   or given up at the deadline) adds one to `done`, so the bar reaches 100%
   only when the last photo is in. Before, it hit 100% at the end of the local
   pass and sat there through the iCloud pass while the picker stayed locked.
+- **Scan report: a per-photo trail.** Test builds only (needs `ScanReport.url`;
+  inert in production). Every photo the scan looked at gets an entry with its
+  outcome, the readings behind it (face distance against the cut, body joints,
+  shoulder spread and the type it gave, iCloud decisions), why it was withdrawn,
+  and its filename in Photos, so a photo the shopper expected can be looked up
+  and explained. The page never sees it.
 
 ---
 

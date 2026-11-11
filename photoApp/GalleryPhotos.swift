@@ -571,7 +571,45 @@ extension ViewController {
         // follows takes the same path as a scanned one.
         if captured { ScanAnalysisStore.store(ScanAnalysis(type: type, body: body), id: id) }
 
+        // The scan's gates, so a camera photo cannot pass what a library photo would not.
+        if captured, Self.captureGatesEnabled, type != .unknown, let face,
+           let gate = captureGate(face: face, in: cgImage, orientation: orientation, type: type, body: body) {
+            print("🚫 capture \(id) gated — \(gate)")
+            sendAnalysisError(id: id, captured: true, error: "unusable", filter: gate)
+            return
+        }
+
         sendAnalysis(id: id, captured: captured, body: body, type: type)
+    }
+
+    /// Scores a captured photo as the scan would and returns the gate that fired, or nil.
+    /// A capture is the original (scale 1) and carries no camera metadata, which the selfie
+    /// gates read as a phone's front camera. The end-of-scan relative gates do not apply.
+    func captureGate(face: VNFaceObservation, in cgImage: CGImage, orientation: CGImagePropertyOrientation,
+                     type: PhotoType, body: BodyCheck) -> String? {
+        let handler = VNImageRequestHandler(cgImage: cgImage, orientation: orientation, options: [:])
+        let selfie = type == .selfie
+        let context = museContext(face: face, in: cgImage, handler: handler, readCover: Self.coverReadEnabled && selfie)
+        var gates: MuseScore.SelfieGates?
+        if Self.selfieGatesV2, selfie {
+            let eyeSpacing = Self.eyeSpacing(of: face, in: cgImage, handler: handler)
+            gates = MuseScore.SelfieGates(eyeSpacingOriginal: eyeSpacing.map { Float($0) }, originalScale: 1,
+                                          originalLongSide: Float(max(cgImage.width, cgImage.height)), camera: nil)
+        }
+        var bodyScore: BodyScore?
+        if Self.fullLengthScoreV2, !selfie, let observation = lastBodyObservation {
+            var objects: [BodyObjects.Object] = []
+            if Self.objectReadEnabled, let upright = BodyScore.upright(cgImage, orientation) {
+                objects = BodyObjects.read(upright: upright)
+            }
+            bodyScore = BodyScore(image: cgImage, orientation: orientation, body: observation, face: face.boundingBox,
+                                  originalScale: 1, caps: Self.garmentCaps(for: context.outfit), objects: objects)
+        }
+        let score = MuseScore(face: face, in: cgImage, handler: handler, faceWidth: face.boundingBox.width * CGFloat(cgImage.width),
+                              expression: context.expression, labels: context.labels, handOnFace: context.handOnFace,
+                              handNearFace: context.handNearFace, outfit: context.outfit, selfie: selfie, gates: gates,
+                              coverReader: context.coverReader, document: context.document, body: bodyScore)
+        return score.filter
     }
 
     /// The one place `onGalleryPhotoAnalysis` is built, so a cached verdict and a
@@ -601,9 +639,11 @@ extension ViewController {
     }
 
     /// Tells the page a photo could not be analysed, on the main queue. `captured` is left out when nil.
-    func sendAnalysisError(id: String, captured: Bool?, error: String) {
+    func sendAnalysisError(id: String, captured: Bool?, error: String, filter: String? = nil) {
         var payload: [String: Any] = ["assetId": id, "error": error]
         if let captured { payload["captured"] = captured }
+        // The gate that refused a captured photo, for the page's notice.
+        if let filter { payload["scoreFilter"] = filter }
         DispatchQueue.main.async {
             self.sendToWeb(["type": "onGalleryPhotoAnalysis", "payload": payload])
         }

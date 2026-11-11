@@ -25,7 +25,7 @@ config.content.galleryPick = {
 }
 ```
 
-That's it. **88 names**: 80 across the 14 pages, plus 8 shared buttons and notes. Two of the 69 are optional overrides for generated headings (see §4).
+That's it. **92 names**: 84 across the 14 pages, plus 8 shared buttons and notes. Two of the 69 are optional overrides for generated headings (see §4).
 
 **Every value is plain text.** No codes, no placeholders, no formatting rules.
 
@@ -47,7 +47,7 @@ That's it. **88 names**: 80 across the 14 pages, plus 8 shared buttons and notes
       searchingPage:      { …}
       pickerPage:         { …}   // the main photo-picking screen
       capturePage:        { …}   // "take 5 photos" fallback
-      topUpPage:          { …}   // take 1 photo for a missing angle
+      topUpPage:          { …}   // take photos for the missing angles
       buildingPage:       { …}
       previewPage:        { …}
       failedPage:         { …}
@@ -343,7 +343,8 @@ its `of` come from the scan and stay as they are; an empty piece leaves no extra
 every slot and locked the front and side picks; `pickedPartialSubHeadingTitle`
 when it filled only some (`{found}` and `{needed}` are counts, `{missing}` the
 shots still needed, such as "1 front, 2 sides"). `lockedPickNotice` is the line
-shown when a locked front or side is tapped; `{shot}` is "front" or "side".
+shown when a locked front or side is tapped; `{shot}` is "front" or "side". Only
+Tier A picks are locked; a Tier B pick can be unticked.
 
 `loadMoreButtonText` is one label for one idea, get me more photos: behind it
 the flow either reopens the system picker or searches further back, and
@@ -377,19 +378,25 @@ Shown when the photo search found nothing usable.
 | `limitedSubHeadingTitle` | Choose different photos of you, or take new ones now. |
 
 The two `limited*` names are shown instead of the heading and subheading when the
-user gave the app limited photo access. `buttonText` is also the button on the
-**Take it now** screen.
+user gave the app limited photo access.
 
 ---
 
-### `topUpPage` — one photo for one missing angle
+### `topUpPage` — photos for the missing angles
 
-Reached from the picker's **Take it now** button.
+Reached from the picker's **Take it now** button. The camera stays open between
+shots: a good shot fills its marker in the row above the preview and the heading
+moves to the next angle; with every angle covered the page returns to the picker
+by itself. `{shot}` is replaced with the angle's name ("front", "side", "selfie").
 
 | Name | Current text |
 |---|---|
 | `subHeadingTitle` | Prop your phone up and stand back so we can see your feet. |
 | `subHeadingTitleSelfie` | Hold the phone up and look at the camera. |
+| `buttonText` | Take photo |
+| `checkingButton` | Checking… *(while the phone checks the shot just taken)* |
+| `gotOneHeading` | Got a {shot}. One more {shot}. *(after a good shot, same angle still short)* |
+| `nextHeading` | Now a {shot} photo. *(after a good shot, next angle)* |
 
 **One extra name, with no fixed default:**
 
@@ -504,7 +511,7 @@ and *Try again*. `{appName}` is replaced with `config.appName`.
 
 ## 5. What stays in the code
 
-The flow holds about 140 strings. 88 are configurable; the rest stay put, each for a
+The flow holds about 145 strings. 92 are configurable; the rest stay put, each for a
 reason. Nothing here is an oversight — ask and any row can be opened up later.
 
 | What stays | Example | Why |
@@ -624,7 +631,11 @@ sentence with your own. See §4.
       },
       "topUpPage": {
         "subHeadingTitle": "Prop your phone up and stand back so we can see your feet.",
-        "subHeadingTitleSelfie": "Hold the phone up and look at the camera."
+        "subHeadingTitleSelfie": "Hold the phone up and look at the camera.",
+        "buttonText": "Take photo",
+        "checkingButton": "Checking…",
+        "gotOneHeading": "Got a {shot}. One more {shot}.",
+        "nextHeading": "Now a {shot} photo."
       },
       "buildingPage": {
         "headingTitle": "Creating your Muse.",

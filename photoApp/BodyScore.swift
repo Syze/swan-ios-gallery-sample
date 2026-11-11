@@ -93,6 +93,8 @@ struct BodyScore {
         var arms: Float = 1
         /// The labels that set the caps, for the reasons line, e.g. "suit 0.83".
         var why: [String] = []
+        /// A loose garment named at its line, e.g. "gown 0.41"; the photo is dropped. See `looseGarmentGateEnabled`.
+        var loose: String?
     }
 
     /// Objects covering this share (0–1) of the body's mask gate the photo.
@@ -460,6 +462,16 @@ struct BodyScore {
         if let bodyPixels, bodyPixels < Self.minBodyPixels { filter = "body under \(Int(Self.minBodyPixels)) px" }
         if sharp < Self.sharpness.bad * 0.4 { filter = filter ?? "blurred body" }
         if objectShare >= Self.objectBodyGate { filter = filter ?? String(format: "objects over %.0f%% of the body", objectShare * 100) }
+        // Loose clothing hides the body: named by the classifier, or a region far wider than its joints
+        // with nothing covering it. Legs only when standing with legs apart, which sitting and crossing also narrow.
+        if ViewController.looseGarmentGateEnabled {
+            let torsoLoose = (readings["torsoFit"] ?? 1) <= ViewController.looseTorsoFit && (readings["objTorso"] ?? 0) < Self.objectBodyGate
+            let legsLoose = (readings["legsFit"] ?? 1) <= ViewController.looseLegsFit && (readings["objLegs"] ?? 0) < Self.objectBodyGate && !sitting && !legsCrossed
+            let why = caps?.loose.map { "loose garment: \($0)" }
+                ?? (torsoLoose ? String(format: "loose garment: torso fit %.2f", readings["torsoFit"] ?? 0)
+                : legsLoose ? String(format: "loose garment: legs fit %.2f", readings["legsFit"] ?? 0) : nil)
+            if let why { filter = filter ?? "loose garment"; readings["loose"] = 1; reasons.append(why) }
+        }
         if quality < 1 { reasons.append(String(format: "sharpness %.2f", quality)) }
 
         // The outfit's colour for the page's session rule: CIELAB means over the middle of the trunk
