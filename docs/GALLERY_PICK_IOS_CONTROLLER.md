@@ -118,7 +118,9 @@ Every step of finding and filtering photos is on the device:
    (a suit, sherwani, gown or sari); the MediaPipe object detector finds a
    bag, umbrella, bicycle or chair over the body. These combine into T from
    0 to 1: Tier A at 0.70, usable down to 0.45. A body under 400 px tall,
-   blurred, or a quarter or more under objects is not usable. The face
+   blurred, a quarter or more under objects, or in a loose outfit is not
+   usable; one whose torso width could not be read keeps its T but gets no
+   tier, so it is never pre-selected (`torsoUnreadNoTier`). The face
    filters do not apply to these photos. The mean colour of the top and the
    trousers is sent with each, so the page can tell two outfits apart. Each
    match also gets an order for the grid: Tier A above

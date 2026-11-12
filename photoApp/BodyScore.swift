@@ -512,7 +512,10 @@ struct BodyScore {
         self.value = filter == nil ? t : 0
         self.filter = filter
         self.parts = [("torso", torso), ("legs", legs), ("arms", arms), ("openness", openness), ("quality", quality)]
-        self.tier = filter != nil ? nil : (t >= ViewController.fullLengthTierALine ? "A" : (t >= ViewController.fullLengthUsableFloor ? "B" : nil))
+        // A torso that could not be measured gives nothing to build from, so the photo is never
+        // pre-selected; it stays in the grid for a hand pick. See `torsoUnreadNoTier`.
+        let noTier = filter != nil || (ViewController.torsoUnreadNoTier && readings["torsoFit"] == nil)
+        self.tier = noTier ? nil : (t >= ViewController.fullLengthTierALine ? "A" : (t >= ViewController.fullLengthUsableFloor ? "B" : nil))
         self.reasons = reasons
         self.readings = readings
     }
