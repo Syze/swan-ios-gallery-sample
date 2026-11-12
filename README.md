@@ -22,8 +22,9 @@ ones. Open it, add your keys, run it on a device.
 3. `photoApp/SwanEnvironment.swift` holds what differs between a sandbox and
    a production build: the Swan page URL, the session URL, the API key, and
    whether each scan's report is posted (sandbox only). The sandbox values are
-   Swan's development environment, so the sample runs as it is; fill in the
-   production values for your account. In a shipped app the session token
+   Swan's development environment and its dev page CDN (whose versions are
+   numbered separately from production's), so the sample runs as it is; fill
+   in the production values for your account. In a shipped app the session token
    comes from your own server and the key never ships; the sample mints it on
    the device to keep the setup short.
 4. In `photoApp/ViewController.swift`, set `shopDomain` (a placeholder) to your

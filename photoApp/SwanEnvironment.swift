@@ -14,10 +14,11 @@ enum SwanEnvironment {
     #warning("Fill in the production values in SwanEnvironment.swift, then delete this line.")
     #endif
 
-    /// The Swan page. Must be https: the camera needs a secure context.
+    /// The Swan page. Must be https: the camera needs a secure context. Sandbox loads the dev CDN,
+    /// whose versions are numbered separately from production's.
     var pageURL: URL {
         switch self {
-        case .sandbox: return URL(string: "https://swan-mobile-web-component.swan.so/v1.3.18/index.html")!
+        case .sandbox: return URL(string: "https://dhua7f26rck7x.cloudfront.net/v1.3.18/index.html")!
         case .production: return URL(string: "https://swan-mobile-web-component.swan.so/v1.3.18/index.html")!
         }
     }
