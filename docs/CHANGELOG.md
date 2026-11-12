@@ -36,6 +36,11 @@ onwards; those entries are kept for reference and need nothing on your side.
   nothing covering the region, and legs only when standing with legs apart).
   Counted as `loose garment` in the summary's `unusableGates` and the scan
   report's trail. Replayed on 612 saved body photos: 32 would go, none Tier A.
+- **A photo whose torso could not be read is never pre-selected.** Behind
+  `torsoUnreadNoTier` (controller). A front or side whose torso width the
+  outline walk could not measure gets no tier: it stays in the grid for a hand
+  pick, but the picker never fills a slot with it. Replayed on 633 saved body
+  photos: 80 lose their tier, all Tier B or lower, none ever pre-selected.
 - **Camera photos go through the scan's gates.** Behind `captureGatesEnabled`
   (controller). A photo taken with the flow's own camera is scored like a
   scanned one: the selfie gates (looking down, head turned, eyes closed, too

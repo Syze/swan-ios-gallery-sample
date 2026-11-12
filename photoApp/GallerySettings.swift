@@ -416,6 +416,9 @@ extension ViewController {
     /// joints imply). Not when an object covers the region, and legs only when standing with legs apart.
     static let looseTorsoFit: Double = 0.35
     static let looseLegsFit: Double = 0.35
+    /// On, a full-length photo whose torso width could not be read gets no tier: it stays in the
+    /// grid but is never pre-selected, since the Muse cannot be measured from it.
+    static let torsoUnreadNoTier = true
     /// Garment caps: labels, confidence line, then the cap on torso, legs and arms.
     /// `suit` has two lines: a sure suit takes the full cap, a likely one a jacket's.
     static let garmentCaps: [(labels: Set<String>, line: Float, torso: Float, legs: Float, arms: Float)] = [
