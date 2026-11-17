@@ -14,12 +14,12 @@ final class ScanStore {
     static let enabled = true
 
     /// Bump when a rule changes the stored verdicts, so old records are ignored and rebuilt.
-    static let rulesVersion = 12
+    static let rulesVersion = 13
 
     /// Why a photo was judged. Nothing that depends on the selfie is stored.
     enum Verdict: String, Codable {
         /// Decided from the photo alone; the selfie plays no part.
-        case noFace, group, faceTooSmall, otherPeople, notFullBody, unusableFace, tooLarge, sensitive
+        case noFace, group, faceTooSmall, otherPeople, animal, notFullBody, unusableFace, tooLarge, sensitive
         /// iCloud-only photo whose thumbnail showed no selfie or standing person.
         /// Used only until the photo has a copy on the phone.
         case cloudThumbnail

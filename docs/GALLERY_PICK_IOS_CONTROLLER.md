@@ -72,7 +72,8 @@ Every step of finding and filtering photos is on the device:
    nothing to match until then). Both are constants in the controller.
    Downloads still queued when that wait ends are cancelled; nothing is
    fetched once the scan is over.
-2. Faces are found with Apple Vision. Group photos, photos with other people,
+2. Faces are found with Apple Vision. Group photos, photos with other people or
+   an animal beside the shopper (`animalBesideDrops`),
    faces too small, and photos that are not head to toe are dropped here (a
    head-to-knee photo counts as not head to toe: the knee rule is off, behind
    `kneeLengthEnabled`). Each remaining photo is sorted by shape: a selfie is
@@ -91,10 +92,11 @@ Every step of finding and filtering photos is on the device:
    dropped when the head is pitched over 15° (MediaPipe's reading) or turned
    over 20°, the mouth is open, teeth show without a
    smile, the face is very dark or blown out or touches the frame's edge,
-   the camera was under 25 cm away, or the original carries no camera data.
-   The distance comes from the iris size and the focal length in the
-   original's metadata, read from the phone's copy of the file; a photo
-   without metadata is read as a phone's front camera. A smile showing teeth
+   or the camera was under 25 cm away. The distance comes from the iris
+   size and the focal length in the original's metadata, read from the
+   phone's copy of the file; a photo without metadata (saved from an app) is
+   read as a phone's front camera and judged like any other
+   (`noCameraDataGateEnabled`, off). A smile showing teeth
    ranks low. A selfie none of those gates dropped is also dropped when a
    cap or hat is on, or when the MediaPipe multiclass selfie segmenter, run
    on the head crop at 256 px, finds clothes or an accessory over the

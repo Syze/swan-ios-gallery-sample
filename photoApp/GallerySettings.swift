@@ -145,6 +145,13 @@ extension ViewController {
     /// someone else rather than a passer-by, poster or reflection.
     static let bystanderRatio: CGFloat = 0.25
 
+    /// On, an animal beside the shopper (a dog on the lap, a cat at the shoulder) is read like a second
+    /// person and the photo is left out. Animals come from the object detector (`BodyObjects.animals`).
+    static let animalBesideDrops = true
+    /// An animal box must reach this share of the shopper's box height to count; smaller is in the distance.
+    static let animalBesideRatio: CGFloat = 0.25
+    static let animalConfidence: Float = 0.5
+
     /// How far (degrees) the reference selfie's head may be turned before a retake is
     /// asked for. Same limits as the library's flat-face rule in `MuseScore`.
     static let selfieMaxYawDegrees: Double = Double(MuseScore.tiltedYawDegrees)
@@ -205,9 +212,10 @@ extension ViewController {
     static let irisMm: Float = 11.7
     static let eyeSpacingMm: Float = 63
     static let assumedFocal35mm: Float = 30
-    /// A selfie with no camera make, model or focal length (saved from an app) is
-    /// ruled out. A photo whose metadata cannot be read in time (iCloud only) is not.
-    static let noCameraDataGateEnabled = true
+    /// On, a selfie with no camera make, model or focal length (saved from an app) is
+    /// ruled out. Off: it is judged like any other, its distance read with
+    /// `assumedFocal35mm`. A photo whose metadata cannot be read in time is never judged on it.
+    static let noCameraDataGateEnabled = false
     /// Either eye under `relativeOpenness` of the shopper's median openness (over at
     /// least `relativeBaselineMin` clean selfies) withdraws the selfie at scan end.
     static let relativeEyeGateEnabled = true

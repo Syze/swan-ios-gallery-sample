@@ -44,6 +44,7 @@ final class ScanReport {
         var report: [String: Any] = [
             "at": ISO8601DateFormatter().string(from: Date()),
             "device": UIDevice.current.model + " iOS " + UIDevice.current.systemVersion,
+            "platform": "ios",
             "model": Self.hardwareModel,
             "page": page.absoluteString,
             "shown": photos.count,

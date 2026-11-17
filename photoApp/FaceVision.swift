@@ -296,6 +296,8 @@ extension ViewController {
         case group(faceCount: Int)
         case faceTooSmall(pixels: Int)
         case otherPeople(body: BodyCheck)
+        /// An animal beside the shopper — see `animalBesideDrops`.
+        case animal(label: String, body: BodyCheck)
         case notFullBody(body: BodyCheck)
         case scored(distances: [Float], body: BodyCheck, type: PhotoType, museScore: MuseScore?)
     }
@@ -570,6 +572,12 @@ extension ViewController {
         if body.hasOthers {
             lastTrace["why"] = "person detector counted \(body.people) people, \(lastShopperFaces) of them the shopper's face"
             return .otherPeople(body: body)
+        }
+        // An animal beside the shopper, read like a second person — see `animalBesideDrops`.
+        if Self.animalBesideDrops, let upright = BodyScore.upright(cgImage, Self.cgOrientation(image.imageOrientation)),
+           let animal = BodyObjects.animalBeside(timed("score.objects") { BodyObjects.readAll(upright: upright) }, ratio: Self.animalBesideRatio) {
+            lastTrace["why"] = "\(animal.label) \(twoPlaces(animal.confidence)) beside the shopper"
+            return .animal(label: animal.label, body: body)
         }
 
         let faceRatio = Self.faceRatio(boxWidth: faces.map(\.boundingBox.width).max() ?? 0, in: cgImage)

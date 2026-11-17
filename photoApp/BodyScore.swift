@@ -463,10 +463,22 @@ struct BodyScore {
         if sharp < Self.sharpness.bad * 0.4 { filter = filter ?? "blurred body" }
         if objectShare >= Self.objectBodyGate { filter = filter ?? String(format: "objects over %.0f%% of the body", objectShare * 100) }
         // Loose clothing hides the body: named by the classifier, or a region far wider than its joints
-        // with nothing covering it. Legs only when standing with legs apart, which sitting and crossing also narrow.
+        // with nothing covering it. Legs only when standing upright with legs apart: sitting, crossing and
+        // bending over all narrow or widen them. Torso only when upright with the arms clear of it: bending,
+        // sitting, lying or an arm across the chest widens the outline as much as a loose top does.
         if ViewController.looseGarmentGateEnabled {
-            let torsoLoose = (readings["torsoFit"] ?? 1) <= ViewController.looseTorsoFit && (readings["objTorso"] ?? 0) < Self.objectBodyGate
-            let legsLoose = (readings["legsFit"] ?? 1) <= ViewController.looseLegsFit && (readings["objLegs"] ?? 0) < Self.objectBodyGate && !sitting && !legsCrossed
+            let armAcross: Bool = {
+                guard let lS, let rS else { return false }
+                let left = min(lS.x, rS.x), right = max(lS.x, rS.x)
+                return [lW, rW, lE, rE].compactMap { $0 }.contains { p in
+                    p.x > left && p.x < right && p.y > min(lS.y, rS.y) && p.y < root.y
+                }
+            }()
+            let torsoUpright = !sitting && !lying && torsoTilt <= Self.leanLight && !armsCrossed && !armAcross
+            readings["torsoUpright"] = torsoUpright ? 1 : 0
+            let torsoLoose = torsoUpright && (readings["torsoFit"] ?? 1) <= ViewController.looseTorsoFit && (readings["objTorso"] ?? 0) < Self.objectBodyGate
+            let legsLoose = (readings["legsFit"] ?? 1) <= ViewController.looseLegsFit && (readings["objLegs"] ?? 0) < Self.objectBodyGate
+                && !sitting && !lying && torsoTilt <= Self.leanHeavy && !legsCrossed
             let why = caps?.loose.map { "loose garment: \($0)" }
                 ?? (torsoLoose ? String(format: "loose garment: torso fit %.2f", readings["torsoFit"] ?? 0)
                 : legsLoose ? String(format: "loose garment: legs fit %.2f", readings["legsFit"] ?? 0) : nil)

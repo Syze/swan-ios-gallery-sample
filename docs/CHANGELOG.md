@@ -26,8 +26,38 @@ onwards; those entries are kept for reference and need nothing on your side.
 `FaceVision.swift`, `BodyScore.swift`, `GallerySettings.swift`,
 `ScanReport.swift` and `ViewController.swift` in `native-samples/`.
 
+### Fixed
+
+- **The loose-garment gate ignores the pose.** The torso rule now fires only
+  when the shopper stands upright with the arms clear of the chest: not sitting,
+  lying, leaning over 12°, arms crossed, or a wrist or elbow across the torso.
+  The legs rule gets the same guard at the 25° lean line, so a slightly tilted
+  person in a full skirt is still caught. Bending over a drawer, crouching,
+  sitting on a sofa or posing with raised arms used to read as a loose outfit;
+  on a labelled set of 784 photos, loose went from 103 to 34, and every photo
+  that stopped being loose was a pose, not clothing. `scoreInputs` gains
+  `torsoUpright`. No threshold changed.
+- **The search screen's count is visible on a phone.** "Looking through your
+  photos… 128 of 521" and its bar sat under nine placeholder tiles, below the
+  fold on most phones. They are pinned in the footer now, where the picker
+  shows the same count, so the two screens agree.
+- **No countdown for the selfie on the no-match camera.** The screen shown
+  when the scan finds nothing counted down by camera alone, so the selfie at
+  the end of the sequence got the 6 s timer meant for full-length shots. It now
+  follows the top-up rule: front and side count down on the front camera,
+  a selfie and any rear-camera shot are taken at once.
+
 ### Changed
 
+- **Selfies without camera data are allowed again.** `noCameraDataGateEnabled`
+  is off in the controller. A selfie saved from an app or sent through chat has
+  no make, model or focal length; since 1.3.7 it was dropped as `no camera
+  data`, now it is judged like any other, with its distance read as a phone's
+  front camera (30 mm equivalent), as before 1.3.7. A shopper's selfies often
+  arrive that way. The gate stays as a switch.
+- **Page: no "Your photos haven't been uploaded" under a failed build.** By
+  then every photo is uploaded, so the failed screen shows the note only when
+  an upload stalled. The note's text key is unchanged.
 - **Loose clothing is left out.** Behind `looseGarmentGateEnabled`. A front
   or side photo in an outfit that hides the body is dropped from the scan, as
   a covered face already is: either the classifier names a gown, sari, kimono,
@@ -36,6 +66,12 @@ onwards; those entries are kept for reference and need nothing on your side.
   nothing covering the region, and legs only when standing with legs apart).
   Counted as `loose garment` in the summary's `unusableGates` and the scan
   report's trail. Replayed on 612 saved body photos: 32 would go, none Tier A.
+- **An animal beside the shopper is left out.** Behind `animalBesideDrops`
+  (controller). A dog, cat, horse or other animal the object detector names at
+  0.5 or more, at least a quarter of the shopper's height, is read like a second
+  person: the photo never reaches the grid, counted as `animals` in the scan
+  summary and `animal` in the report's trail. Decided by the photo alone, so the
+  scan store keeps it (rules version 13).
 - **A photo whose torso could not be read is never pre-selected.** Behind
   `torsoUnreadNoTier` (controller). A front or side whose torso width the
   outline walk could not measure gets no tier: it stays in the grid for a hand
@@ -74,6 +110,34 @@ onwards; those entries are kept for reference and need nothing on your side.
   shoulder spread and the type it gave, iCloud decisions), why it was withdrawn,
   and its filename in Photos, so a photo the shopper expected can be looked up
   and explained. The page never sees it.
+- **`capture_shot_taken` and `topup_captured` say which camera.** A new
+  `camera` field, `front` or `rear`, like `camera_capture` already has.
+- **Page: the no-match camera follows the picker's order.** The five shots
+  are now taken in the order the marker row shows: the selfie, then the two
+  fronts, then the two sides. Before, the selfie came last.
+
+### Added
+
+- **Page: knows which platform hosts it.** `config.platform` (`"ios"` or
+  `"android"`) names the host; without it the page reads the bridge the host
+  exposed (`webkit.messageHandlers.swanBridge` is iOS, `window.swanBridge` is
+  Android), then the user agent, and assumes iOS. The result is logged once as
+  `[swan/gallery] platform android (config)`. An existing iOS host needs no
+  change.
+- **Page: the platform goes to the Muse and to analytics.** The build request's
+  `requestSource` is the detected platform (`android` on an Android host; it was
+  always `ios`), and every gallery event carries a `platform` field.
+- **Page: Android permission guides.** Behind `PLATFORM_GUIDES`. On an Android
+  host the photo-access and camera-blocked pages use Android's words and
+  Settings path ("Open Settings › Apps › {appName} › Permissions", "Photos and
+  videos", "Allow all"), draw the Android permission screens, and show both
+  "Open Settings" and "Try again", since Android does not restart the app
+  after a permission change. Overridable per page through
+  `content.galleryPick.libraryBlockedPage` / `cameraBlockedPage`
+  (GALLERY_PICK_TEXT_CONFIG.md). iOS pages are unchanged.
+- **Page: `config.photoScheme`.** The URL scheme the host serves thumbnails on
+  (`<scheme>://thumb?id=…`), for a host that cannot register `swan-photo`.
+  Defaults to `swan-photo`; iOS hosts send nothing.
 
 ---
 

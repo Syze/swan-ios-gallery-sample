@@ -462,6 +462,10 @@ photos are gone with the reload, so the button starts the flow over.
 
 The last two cover **a Muse build that failed**.
 
+The `common.notUploadedNote` line under the button appears only for photos that
+wouldn't upload. A failed Muse build has already uploaded every photo, so that
+case shows no footnote.
+
 > ⚠️ **`failedSubHeadingTitle` almost never appears.** When a build fails, the backend's
 > own error sentence is shown **verbatim** in its place, and every failure path in the
 > code supplies one. Treat it as a safety net, not as copy worth tuning. The backend's
@@ -472,17 +476,22 @@ The last two cover **a Muse build that failed**.
 ### `libraryBlockedPage`
 
 Shown whenever someone refuses photo-library access: a heading, three numbered
-step cards with a drawn copy of iOS Settings, *Open Settings*, and a footer line.
-`{appName}` is replaced with `config.appName` (default "this app"). The labels
-inside the drawn Settings page (Photos, None, Full Access) are fixed.
+step cards with a drawn copy of the phone's Settings, *Open Settings*, and a
+footer line. `{appName}` is replaced with `config.appName` (default "this app").
+The labels inside the drawn Settings page (Photos, None, Full Access) are fixed.
 
-| Name | Current text |
-|---|---|
-| `headingTitle` | Allow photo access. |
-| `step1Text` | Search for {appName} in Settings. |
-| `step2Text` | Tap Photos. |
-| `step3Text` | Choose Full Access. |
-| `footerText` | The search runs on your phone. Nothing leaves it until you approve it. |
+On an Android host (`config.platform`, or the bridge the page finds) the three
+steps default to Android's words and the drawing shows Android's permission
+screens, with *Try again* beside *Open Settings*. An override you send wins on
+both platforms.
+
+| Name | Current text | Android default |
+|---|---|---|
+| `headingTitle` | Allow photo access. | same |
+| `step1Text` | Search for {appName} in Settings. | Open Settings › Apps › {appName} › Permissions. |
+| `step2Text` | Tap Photos. | Tap Photos and videos. |
+| `step3Text` | Choose Full Access. | Choose Allow all, then come back. |
+| `footerText` | The search runs on your phone. Nothing leaves it until you approve it. | same |
 | `subHeadingTitle` | Allow photo library access in your device settings, then try again. *(older screen only, `PERMISSION_GUIDES = false`)* |
 | `bodyText` | Swan needs access to your photo library to find pictures of you. Nothing is uploaded — the matching happens on your phone. *(older screen only)* |
 
@@ -493,13 +502,14 @@ inside the drawn Settings page (Photos, None, Full Access) are fixed.
 Replaces the camera screen when the camera will not open. Same step-guide layout
 as `libraryBlockedPage`; the heading follows the reason. Denied and unknown show
 the two steps, the drawn Settings page and *Open Settings*; busy shows one step
-and *Try again*. `{appName}` is replaced with `config.appName`.
+and *Try again*. `{appName}` is replaced with `config.appName`. On Android the
+two steps default to Android's words, as for `libraryBlockedPage`.
 
-| Name | Current text |
-|---|---|
-| `headingTitle` | Turn on camera access. |
-| `step1Text` | Search for {appName} in Settings. |
-| `step2Text` | Turn on Camera. |
+| Name | Current text | Android default |
+|---|---|---|
+| `headingTitle` | Turn on camera access. | same |
+| `step1Text` | Search for {appName} in Settings. | Open Settings › Apps › {appName} › Permissions. |
+| `step2Text` | Turn on Camera. | Tap Camera and allow it, then come back. |
 | `busyHeadingTitle` | The camera is busy. |
 | `busyStepText` | Close the app that is using the camera, then come back. |
 | `unknownHeadingTitle` | We couldn't open the camera. |

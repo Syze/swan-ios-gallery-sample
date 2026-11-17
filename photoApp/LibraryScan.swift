@@ -53,6 +53,8 @@ final class LibraryScan {
     private var tooSmall = 0
     private var notFullBody = 0
     private var otherPeople = 0
+    // An animal beside the shopper — see `animalBesideDrops`.
+    private var animals = 0
     private var sensitiveSkipped = 0
     // Originals sized after a match — see `checkOriginal`.
     private var tooLargeSkipped = 0
@@ -297,6 +299,7 @@ final class LibraryScan {
         case .group: groupSkipped += 1; return decided()
         case .faceTooSmall: tooSmall += 1; return decided()
         case .otherPeople: otherPeople += 1; return decided()
+        case .animal: animals += 1; return decided()
         case .notFullBody: notFullBody += 1; return decided()
         case .unusableFace: unusableFace += 1; return decided()
         case .tooLarge: tooLargeSkipped += 1; return decided()
@@ -370,6 +373,12 @@ final class LibraryScan {
             // One face: someone else is in the photo whoever the shopper
             // is. Several faces all the shopper's: only against this selfie.
             remember(asset, (controller?.lastShopperFaces ?? 1) == 1 ? .otherPeople : .candidate)
+
+        case .animal(let label, _):
+            animals += 1
+            noteExamined(asset, "animal", ["why": "\(label) beside the shopper"])
+            // Decided by the photo alone, whoever the shopper is.
+            remember(asset, .animal)
 
         case .notFullBody(let body):
             notFullBody += 1
@@ -988,6 +997,7 @@ final class LibraryScan {
         summary["group"] = groupSkipped
         summary["sameShopper"] = sameShopper
         summary["otherPeople"] = otherPeople
+        summary["animals"] = animals
         summary["faceTooSmall"] = tooSmall
         summary["notFullBody"] = notFullBody
         summary["bodyRetried"] = bodyRetried

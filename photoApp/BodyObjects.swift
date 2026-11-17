@@ -20,6 +20,8 @@ struct BodyObjects {
     static let labels: Set<String> = ["handbag", "backpack", "suitcase", "umbrella", "bicycle", "motorcycle", "chair", "bench", "couch"]
     /// Minimum detection score, 0–1.
     static let confidence: Float = 0.3
+    /// Animals the detector knows, for `ViewController.animalBesideDrops`.
+    static let animals: Set<String> = ["dog", "cat", "horse", "sheep", "cow", "bird", "elephant", "bear", "zebra", "giraffe"]
 
     /// Built once, on first access. CPU delegate: the scan keeps running in the background,
     /// where iOS refuses GPU work.
@@ -33,8 +35,8 @@ struct BodyObjects {
         options.baseOptions.delegate = .CPU
         options.runningMode = .image
         options.scoreThreshold = confidence
-        options.categoryAllowlist = Array(labels)
-        options.maxResults = 8
+        options.categoryAllowlist = Array(labels) + Array(animals) + ["person"]
+        options.maxResults = 12
         do {
             return try ObjectDetector(options: options)
         } catch {
@@ -48,16 +50,29 @@ struct BodyObjects {
         _ = detector
     }
 
-    /// The objects in an upright image, strongest first. Empty when the model is missing or finds none.
+    /// The objects over the body in an upright image, strongest first. Empty when the model is missing or finds none.
     static func read(upright image: CGImage) -> [Object] {
+        readAll(upright: image).filter { labels.contains($0.label) }
+    }
+
+    /// Everything the detector names: objects, animals and people.
+    static func readAll(upright image: CGImage) -> [Object] {
         guard let detector, let input = mpImage(image),
               let result = try? detector.detect(image: input) else { return [] }
         let w = CGFloat(image.width), h = CGFloat(image.height)
         return result.detections.compactMap { d -> Object? in
-            guard let c = d.categories.first, let name = c.categoryName, labels.contains(name) else { return nil }
+            guard let c = d.categories.first, let name = c.categoryName else { return nil }
             let b = d.boundingBox
             return Object(label: name, confidence: c.score,
                           box: CGRect(x: b.minX / w, y: b.minY / h, width: b.width / w, height: b.height / h))
         }.sorted { $0.confidence > $1.confidence }
+    }
+
+    /// An animal beside the shopper: at `ViewController.animalConfidence` or more and at least
+    /// `ratio` of the tallest person's box height. The strongest, or nil.
+    static func animalBeside(_ objects: [Object], ratio: CGFloat) -> Object? {
+        let tallest = objects.filter { $0.label == "person" }.map(\.box.height).max() ?? 1
+        return objects.filter { animals.contains($0.label) && $0.confidence >= ViewController.animalConfidence && $0.box.height >= tallest * ratio }
+            .max { $0.confidence < $1.confidence }
     }
 }
