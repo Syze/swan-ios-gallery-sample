@@ -20,6 +20,8 @@ final class ScanReport {
     private var droppedWhy: [String: String] = [:]
     private var checks: [String: Any] = [:]
     private var trail: [[String: Any]] = []
+    /// The signed-in account the scan ran for; the ingest lists scans by it.
+    var account: String?
     /// Called on the main queue with the stored report's id and photo count.
     var onStored: ((_ id: String, _ photos: Int) -> Void)?
 
@@ -56,6 +58,7 @@ final class ScanReport {
             "trail": trail,
         ]
         for key in ["error", "denied", "limited", "skipped", "summary"] { report[key] = payload[key] }
+        if let account { report["account"] = account }
         matches = [:]
         droppedWhy = [:]
         checks = [:]

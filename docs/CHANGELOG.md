@@ -28,6 +28,10 @@ onwards; those entries are kept for reference and need nothing on your side.
 
 ### Fixed
 
+- **A camera selfie no longer sits in a padded tile.** The selfie stream is
+  square and grid tiles are 3:4, so a camera selfie showed grey bands above and
+  below. Camera-shot tiles now fill the tile (`is-capture`, display only); the
+  photo sent to the Muse is unchanged, and library photos still show whole.
 - **The loose-garment gate ignores the pose.** The torso rule now fires only
   when the shopper stands upright with the arms clear of the chest: not sitting,
   lying, leaning over 12°, arms crossed, or a wrist or elbow across the torso.
@@ -47,8 +51,35 @@ onwards; those entries are kept for reference and need nothing on your side.
   follows the top-up rule: front and side count down on the front camera,
   a selfie and any rear-camera shot are taken at once.
 
+### Added
+
+- **A camera shot must be the shopper.** The controller compares the face in
+  a top-up photo with the selfie at the scan's match cut and refuses a stranger
+  as unusable, with the notice "not the person in the selfie". Behind
+  `captureIdentityCheck` in `GallerySettings.swift`; the Android sample does
+  the same.
+
 ### Changed
 
+- **A jacket counts as loose clothing.** `jacket` joins the loose-garment
+  labels at the same 0.3 line, so a coat or outer layer the classifier names
+  is left out of the scan like a gown. On 784 labelled photos checked against
+  the backend's own garment reading, this took agreement from 58% to 69%: 70
+  coats now go, 4 fitted tops are lost. Dresses and coats the classifier does
+  not name still pass; the backend remains the second gate for those.
+  Android reads `jacket` higher (0.29–0.46 on T-shirts), so it uses its own
+  line of 0.75 (`looseGarmentLineByLabel`), untested against the set.
+- **Pre-selected fronts and sides are all locked, and only Tier A is picked.**
+  A Tier B front or side (score 0.45 to 0.70) used to fill a slot Tier A could
+  not, and could then be unticked, which made it vanish from the grid. Now a
+  slot with no Tier A photo stays empty and the camera asks for that shot,
+  and every pre-selected front and side stays selected, with the same short
+  notice on tap. A camera shot can still be unticked, and now stays in the
+  grid when it is, so it can be ticked again. A tapped photo the phone then
+  refuses, or puts back down because its slot is already full, also stays,
+  greyed out, instead of leaving the grid. Switches:
+  `PRESELECT_FULL_LENGTH_FLOOR` (0.70) and `LOCK_PRESELECTED_BODY_TIER_A_ONLY`
+  (off).
 - **Selfies without camera data are allowed again.** `noCameraDataGateEnabled`
   is off in the controller. A selfie saved from an app or sent through chat has
   no make, model or focal length; since 1.3.7 it was dropped as `no camera

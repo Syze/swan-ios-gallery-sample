@@ -571,6 +571,15 @@ extension ViewController {
         // follows takes the same path as a scanned one.
         if captured { ScanAnalysisStore.store(ScanAnalysis(type: type, body: body), id: id) }
 
+        // The shot must be the shopper in the selfie, at the scan's cut.
+        if captured, Self.captureIdentityCheck, let face, let reference = referenceEmbedding, let recognizer = Self.faceRecognizer {
+            let distance = recognizer.embedding(in: cgImage, near: face.boundingBox, seed: face).map { FaceRecognizer.distance(reference, $0) }
+            if distance == nil || distance! >= Self.matchThreshold {
+                sendAnalysisError(id: id, captured: true, error: "unusable", filter: Self.captureNotShopperWhy)
+                return
+            }
+        }
+
         // The scan's gates, so a camera photo cannot pass what a library photo would not.
         if captured, Self.captureGatesEnabled, type != .unknown, let face,
            let gate = captureGate(face: face, in: cgImage, orientation: orientation, type: type, body: body) {

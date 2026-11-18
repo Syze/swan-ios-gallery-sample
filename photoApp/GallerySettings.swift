@@ -29,6 +29,9 @@ extension ViewController {
     /// On, a photo taken with the flow's own camera goes through the same gates as a scanned one
     /// (selfie gates, body score, loose garment), so the camera cannot sidestep the scan's rules.
     static let captureGatesEnabled = true
+    /// A camera shot must be the shopper in the selfie, at the scan's cut; the page shows `captureNotShopperWhy`.
+    static let captureIdentityCheck = true
+    static let captureNotShopperWhy = "not the person in the selfie"
 
     /// Match the face before running body pose (the most expensive request), so a
     /// face at or past `gapCutCeiling` skips pose. A small face, which the final
@@ -417,8 +420,9 @@ extension ViewController {
     /// On, a photo in a loose outfit is dropped, not capped: a loose garment hides the body,
     /// so nothing in it can be measured. Loose by label, or by the outline reading wide for the joints.
     static let looseGarmentGateEnabled = true
-    /// Garments that hide the body whatever the fit says, at or over this confidence.
-    static let looseGarmentLabels: Set<String> = ["gown", "sari", "kimono", "wedding_dress", "cloak", "poncho", "bathrobe", "costume"]
+    /// Garments that hide the body whatever the fit says, at or over this confidence. A jacket at 0.3 is a
+    /// real outer layer on Vision (784 labelled photos: 70 coats caught, 4 fitted tops lost).
+    static let looseGarmentLabels: Set<String> = ["gown", "sari", "kimono", "wedding_dress", "cloak", "poncho", "bathrobe", "costume", "jacket"]
     static let looseGarmentLine: Float = 0.3
     /// Fit at or under which a region reads as loose clothing (torso 0.35 is a width 1.25× the
     /// joints imply). Not when an object covers the region, and legs only when standing with legs apart.

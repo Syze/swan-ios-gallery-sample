@@ -16,7 +16,7 @@ All of them are in `native-samples/`. The Podfile names the sample target
 | `GalleryScan.swift`, `LibraryScan.swift` | The library scan: the reference selfie, photo access, each photo, the iCloud pass, the end-of-scan checks, the results. |
 | `FaceVision.swift` | Loads photos, checks the selfie, matches faces, checks the body. |
 | `MuseScore.swift` | Scores a matched photo for the Muse (the selfie score and its gates). |
-| `GalleryPhotos.swift` | Serves photos to the page: thumbnails, originals, captures, analysis. |
+| `GalleryPhotos.swift` | Serves photos to the page: thumbnails, originals, captures, analysis. A camera shot is judged as the scan would, and must be the shopper in the selfie (`captureIdentityCheck`, `GallerySettings.swift`). |
 | `Helpers.swift` | Small shared helpers. |
 | `SwanEnvironment.swift` | The values that differ between a sandbox and a production build: page URL, session URL, key, scan report. |
 | `ScanReport.swift` | Posts a JSON report of each scan in sandbox builds; off in production. |
@@ -92,11 +92,10 @@ Every step of finding and filtering photos is on the device:
    dropped when the head is pitched over 15° (MediaPipe's reading) or turned
    over 20°, the mouth is open, teeth show without a
    smile, the face is very dark or blown out or touches the frame's edge,
-   or the camera was under 25 cm away. The distance comes from the iris
-   size and the focal length in the original's metadata, read from the
-   phone's copy of the file; a photo without metadata (saved from an app) is
-   read as a phone's front camera and judged like any other
-   (`noCameraDataGateEnabled`, off). A smile showing teeth
+   the camera was under 25 cm away, or the original carries no camera data.
+   The distance comes from the iris size and the focal length in the
+   original's metadata, read from the phone's copy of the file; a photo
+   without metadata is read as a phone's front camera. A smile showing teeth
    ranks low. A selfie none of those gates dropped is also dropped when a
    cap or hat is on, or when the MediaPipe multiclass selfie segmenter, run
    on the head crop at 256 px, finds clothes or an accessory over the
@@ -186,7 +185,7 @@ during the scan.
 
 | Setting | Sandbox | Production | What it does when set |
 |---|---|---|---|
-| `scanReport` in `SwanEnvironment.swift` | set | nil | Posts one JSON report per scan to Swan's scan ingest (`devphotoingest.api.swanvision.ai`, with its ingest key, gzipped, retried on server and network errors): each match with its score and readings, the withdrawn matches and why, the end-of-scan checks (usual eye openness, usual sharpness, gaze resting point), the page's picks, the scan summary and the phone model. Photo ids are cut to 8 characters, except `dupGroup`, which carries the full photo identifier. No images, face embeddings, email or tokens; it does hold each photo's face and body measurements (`scoreInputs`) and capture time, so treat it as personal data. |
+| `scanReport` in `SwanEnvironment.swift` | set | nil | Posts one JSON report per scan to Swan's scan ingest (`devphotoingest.api.swanvision.ai`, with its ingest key, gzipped, retried on server and network errors): each match with its score and readings, the withdrawn matches and why, the end-of-scan checks (usual eye openness, usual sharpness, gaze resting point), the page's picks, the scan summary and the phone model. Photo ids are cut to 8 characters, except `dupGroup`, which carries the full photo identifier. No images, face embeddings or tokens; the signed-in email goes along as `account`, which the ingest lists scans by (`GET /v1/scans?account=<email>`, or the Account box on its page); it does hold each photo's face and body measurements (`scoreInputs`) and capture time, so treat it as personal data. |
 
 The console shows errors only: a missing model file, the page not loading,
 a photo that could not be read or served, the results store not saving. One

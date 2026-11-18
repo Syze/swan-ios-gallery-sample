@@ -482,6 +482,7 @@ final class ViewController: UIViewController {
     /// Posts a message to the page. Passed as an argument, not built into a string,
     /// because U+2028/U+2029 are valid in JSON but break JavaScript source.
     func sendToWeb(_ payload: [String: Any]) {
+        scanReport.account = session?.email
         scanReport.collect(payload, page: sdkURL)
         webView.callAsyncJavaScript(
             "window.postMessage(payload, window.location.origin);",
