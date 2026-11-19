@@ -42,7 +42,7 @@ final class ViewController: UIViewController {
                     "headingTitle": "Create your Muse.",
                     "subHeadingTitle": "Take a selfie and we’ll find photos of you to measure from. Then see anything on you, in your size.",
                     "buttonText": "Start",
-                    "footerText": "About a minute. Nothing leaves your phone until you approve it.",
+                    "footerText": "About a minute. Nothing leaves your phone until you approve it.\(SwanEnvironment.current.versionLabel.isEmpty ? "" : " " + SwanEnvironment.current.versionLabel)",
                 ],
                 "selfiePage": [
                     "headingTitle": "First, a quick selfie.",

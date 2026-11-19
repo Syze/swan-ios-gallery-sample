@@ -23,6 +23,13 @@ enum SwanEnvironment {
         }
     }
 
+    /// The version segment of `pageURL`, e.g. "v1.3.21".
+    /// Empty in production, so only sandbox builds show it.
+    var versionLabel: String {
+        guard self == .sandbox else { return "" }
+        return pageURL.pathComponents.first { $0.hasPrefix("v") && $0.count > 1 && $0.dropFirst().first?.isNumber == true } ?? ""
+    }
+
     /// Where the sample mints session tokens. Must be the same environment as the page.
     var sessionURL: URL {
         switch self {
