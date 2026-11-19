@@ -19,6 +19,8 @@ struct BodyCheck {
     /// Knees and ankles seen, 0–4. Sent to the page as `lowerBodyJoints`.
     let lowerJoints: Int
     let ankles: Int
+    /// Knees seen, for the head-to-toe check.
+    var knees = 0
     /// Any of the nose, eyes or ears.
     let headSeen: Bool
     /// Highest head point to lowest ankle, as a fraction of the image height.
@@ -49,6 +51,7 @@ struct BodyCheck {
     /// Head to toe: head in frame, enough ankles, a body tall enough to be the
     /// subject, and room below the ankles for the feet.
     var isHeadToAnkle: Bool {
+        if ViewController.headToAnkleOnly { return headSeen && ankles >= ViewController.minAnkles && knees >= ViewController.gateKnees }
         let needed = ankles >= 2 ? ViewController.minBodySpanBothAnkles : ViewController.minBodySpan
         return headSeen && ankles >= ViewController.minAnkles && span >= needed
             && footRoom >= ViewController.minFootRoom * span

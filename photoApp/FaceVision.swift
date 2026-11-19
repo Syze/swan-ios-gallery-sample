@@ -727,9 +727,10 @@ extension ViewController {
         guard let bodies = request.results, !bodies.isEmpty else { return nobody }
 
         func seen(_ joints: [VNHumanBodyPoseObservation.JointName],
-                  of body: VNHumanBodyPoseObservation) -> [VNRecognizedPoint] {
+                  of body: VNHumanBodyPoseObservation,
+                  atLeast confidence: Float = Self.bodyJointConfidence) -> [VNRecognizedPoint] {
             joints.compactMap { try? body.recognizedPoint($0) }
-                .filter { $0.confidence >= Self.bodyJointConfidence }
+                .filter { $0.confidence >= confidence }
         }
         let headJoints: [VNHumanBodyPoseObservation.JointName] = [.nose, .leftEye, .rightEye, .leftEar, .rightEar]
 
@@ -749,12 +750,14 @@ extension ViewController {
 
         let knees = seen([.leftKnee, .rightKnee], of: observation)
         let ankles = seen([.leftAnkle, .rightAnkle], of: observation)
+        // The gate's ankles, at `gateAnkleConfidence`; the lower-joint count keeps the usual line.
+        let gateAnkles = seen([.leftAnkle, .rightAnkle], of: observation, atLeast: Self.gateAnkleConfidence)
         let head = seen(headJoints, of: observation)
 
         // Vision's y runs bottom to top, so the span is the highest head point less
         // the lowest ankle — and zero when either end is missing.
         var span: CGFloat = 0
-        if let top = head.map(\.location.y).max(), let bottom = ankles.map(\.location.y).min() {
+        if let top = head.map(\.location.y).max(), let bottom = gateAnkles.map(\.location.y).min() {
             span = max(0, top - bottom)
         }
 
@@ -780,10 +783,11 @@ extension ViewController {
         }
 
         let result = BodyCheck(lowerJoints: knees.count + ankles.count,
-                               ankles: ankles.count,
+                               ankles: gateAnkles.count,
+                               knees: knees.count,
                                headSeen: !head.isEmpty,
                                span: span,
-                               footRoom: ankles.map(\.location.y).min() ?? 0,
+                               footRoom: gateAnkles.map(\.location.y).min() ?? 0,
                                people: people,
                                shoulderSpread: spread(.leftShoulder, .rightShoulder))
         return result

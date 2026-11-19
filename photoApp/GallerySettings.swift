@@ -406,7 +406,9 @@ extension ViewController {
     /// On, a matched front, three-quarter or side is scored by `BodyScore` (how clearly
     /// the body shows), not the face. Tier A at `fullLengthTierALine`, usable from the floor.
     static let fullLengthScoreV2 = true
-    static let fullLengthTierALine: Float = 0.70
+    /// 0.55 since 19 Nov 2026 (was 0.70): on the val set that lifts pre-selects from 32 to 77 of 237,
+    /// with the ankle-only gate and the softer light lines in `BodyScore`.
+    static let fullLengthTierALine: Float = 0.55
     static let fullLengthUsableFloor: Float = 0.45
     /// On, the outfit multipliers (`MuseScore.outfitMultiplier`) also apply to the body
     /// score. The tier stays the body's own; only the value and order move.
@@ -427,10 +429,15 @@ extension ViewController {
     /// Fit at or under which a region reads as loose clothing (torso 0.35 is a width 1.25× the
     /// joints imply). Not when an object covers the region, and legs only when standing with legs apart.
     static let looseTorsoFit: Double = 0.35
-    static let looseLegsFit: Double = 0.35
+    /// Legs 0.50 since 19 Nov 2026 (was 0.35): a coat hem over the thighs reads 0.42–0.50. On 1021 labelled
+    /// photos the step from 0.35 drops 13, 8 loose on the backend (4 coats) and 5 fitted.
+    static let looseLegsFit: Double = 0.50
     /// On, a full-length photo whose torso width could not be read gets no tier: it stays in the
     /// grid but is never pre-selected, since the Muse cannot be measured from it.
     static let torsoUnreadNoTier = true
+    /// On, a photo of the shopper sitting gets no tier: it stays in the grid but is never pre-selected,
+    /// since the Muse needs a standing body. On 1021 labelled photos, 73 sitting photos reached Tier A at 0.55.
+    static let sittingNoTier = true
     /// Garment caps: labels, confidence line, then the cap on torso, legs and arms.
     /// `suit` has two lines: a sure suit takes the full cap, a likely one a jacket's.
     static let garmentCaps: [(labels: Set<String>, line: Float, torso: Float, legs: Float, arms: Float)] = [
@@ -517,6 +524,16 @@ extension ViewController {
     /// Room below the lowest ankle, as a fraction of the span, so the feet are in
     /// frame.
     static let minFootRoom: CGFloat = 0.10
+
+    /// On, head to toe needs only the head and `minAnkles` ankles: the span and foot-room
+    /// checks are skipped, since the Muse builds from a body shown to the ankle. Off: both apply.
+    static let headToAnkleOnly = true
+    /// How sure Vision must be of an ankle for the head-to-toe check alone; the score and the
+    /// lower-joint count keep `bodyJointConfidence`. An ankle at the frame's edge reads about 0.2.
+    static let gateAnkleConfidence: Float = 0.15
+    /// Knees the head-to-toe check needs with `headToAnkleOnly`: on 1021 labelled photos, the 4
+    /// pre-selects a knee rules out are all ones the backend refuses.
+    static let gateKnees = 1
 
     /// Body turn, in degrees, from which a full-length photo is a side. Estimated from
     /// the shoulder spread against a front's spread, to about ±10°.

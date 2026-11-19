@@ -46,7 +46,8 @@ struct BodyScore {
     /// Outline clarity: luminance contrast (0–1) across the body's edge; 1 at `good` or over, 0 at `bad` or under.
     static let outline: (good: Double, bad: Double) = (0.14, 0.04)
     /// Light: mean luminance (0–1) inside the region; set low so only a silhouette or deep shadow fails.
-    static let light: (good: Double, bad: Double) = (0.10, 0.03)
+    /// Halved on 19 Nov 2026 (was 0.10, 0.03): dark trousers in a dim room no longer cost a tier.
+    static let light: (good: Double, bad: Double) = (0.05, 0.015)
     /// Added to a region's score at full skin share: where skin shows, the outline is the body's own.
     static let skinBonus: Double = 0.1
     /// Sitting: lowest knee less than this far below the hips (torso lengths), a thigh tilted past
@@ -527,6 +528,7 @@ struct BodyScore {
         // A torso that could not be measured gives nothing to build from, so the photo is never
         // pre-selected; it stays in the grid for a hand pick. See `torsoUnreadNoTier`.
         let noTier = filter != nil || (ViewController.torsoUnreadNoTier && readings["torsoFit"] == nil)
+            || (ViewController.sittingNoTier && sitting)
         self.tier = noTier ? nil : (t >= ViewController.fullLengthTierALine ? "A" : (t >= ViewController.fullLengthUsableFloor ? "B" : nil))
         self.reasons = reasons
         self.readings = readings
