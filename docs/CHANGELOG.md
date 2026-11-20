@@ -22,6 +22,48 @@ onwards; those entries are kept for reference and need nothing on your side.
 
 ## [Unreleased]
 
+## [1.3.23] — 2026-11-20
+
+### Changed
+
+- **Controller (sample):** the body score reads the person mask and the outline
+  with the body at a fixed scale (torso 400 px) and the outline contrast over an
+  8 px band, so the same photo scores the same whatever size it was rendered at.
+  On 1021 labelled photos the outline readings that moved with render size fall
+  from 106 to 34 (torso) and 123 to 67 (arms); 22 photos change tier, 10 of them
+  up from B to A. Behind `fixedScaleEnabled` and `outlineBand` in `BodyScore`.
+  Controller update: yes, `BodyScore.swift` (and `BodyScore.kt` on Android).
+- **Controller (Android sample):** two parity fixes to the face-size floor and
+  the "busy top" reading. A rotated photo's stored size is swapped to upright
+  (most iPhone portraits are stored landscape), so a face no longer reads a
+  third bigger than on iOS; and the busy reading shrinks the torso crop with a
+  box average, as iOS does, so it sits within 0.01 of iOS; its line is 0.12
+  (was 0.13), iOS's 0.11 plus the margin ML Kit's larger crop adds. Debug builds also log each face's landmarker width beside the
+  box width (`debugFaceWidths`). Controller update: yes, `GalleryPhotos.kt`,
+  `Labels.kt`, `GallerySettings.kt`, `FaceVision.kt`, `GalleryScan.kt`.
+- **Mobile:** the picker shows from the moment the scan starts, with its skeleton
+  grid and progress line, instead of a separate searching screen until the first
+  match (`SCAN_GRID_FROM_START`). A library that is all in iCloud now looks like
+  a local one while its downloads come in.
+- **Mobile:** with no Tier A front or side left for a slot, the picker pre-selects
+  the best usable Tier B one instead of leaving the slot empty; it is locked like
+  any pre-selected body (`PRESELECT_BODY_B_FALLBACK`). The pre-select floor
+  follows the controller's Tier A line, now 0.60. Controller update: yes, the
+  sample's `fullLengthTierALine` is 0.60.
+
+### Fixed
+
+- **Mobile:** the photo top-up camera asks for an upright 3:4 frame by width and
+  height (1440 by 1920), not by height alone: a square crops the head and feet,
+  and Android returned a square when only the height was asked. The selfie
+  camera stays square. <!-- reconstructed from the useCameraStream.ts diff on 20 Nov; check wording -->
+- **The grid no longer goes blank while the scan runs.** Fronts and sides stay
+  hidden until they are picked, so a scan whose first matches were bodies
+  showed a white grid over the progress line. The grid now draws skeleton
+  tiles until the first visible photo arrives (`SCAN_EMPTY_GRID_SKELETON`).
+
+## [1.3.22] — 2026-11-19
+
 **Page and controller.** The controller update replaces `LibraryScan.swift`,
 `FaceVision.swift`, `BodyScore.swift`, `GallerySettings.swift`,
 `ScanReport.swift` and `ViewController.swift` in `native-samples/`.
@@ -60,6 +102,20 @@ onwards; those entries are kept for reference and need nothing on your side.
   the same.
 
 ### Changed
+
+- **More full-length photos are pre-selected.** Tier A for a front or side
+  starts at 0.55 (was 0.70) and the page's pre-select floor follows. Head to
+  toe now needs the head, one knee and one ankle in frame; the body-height and
+  foot-room checks are off behind `headToAnkleOnly`, an ankle counts for that
+  check at confidence 0.15 (`gateAnkleConfidence`), and `gateKnees` sets the
+  knees needed. A photo of the shopper sitting gets no tier (`sittingNoTier`),
+  so it stays in the grid but is never pre-selected. The legs loose line is 0.50
+  (was 0.35), so a coat hem spreading over the thighs reads as loose: on the
+  labelled sets that drops 13 photos, 8 loose on the backend, 4 of them coats,
+  and 5 fitted. Dark trousers in a dim room cost
+  less (the body score's light lines are halved). On the 237-photo val set this
+  lifts pre-selects from 32 to 77 and head-to-toe from 115 to 221; the backend
+  accepts 226. Same on Android.
 
 - **A jacket counts as loose clothing.** `jacket` joins the loose-garment
   labels at the same 0.3 line, so a coat or outer layer the classifier names

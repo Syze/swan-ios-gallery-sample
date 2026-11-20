@@ -406,9 +406,9 @@ extension ViewController {
     /// On, a matched front, three-quarter or side is scored by `BodyScore` (how clearly
     /// the body shows), not the face. Tier A at `fullLengthTierALine`, usable from the floor.
     static let fullLengthScoreV2 = true
-    /// 0.55 since 19 Nov 2026 (was 0.70): on the val set that lifts pre-selects from 32 to 77 of 237,
-    /// with the ankle-only gate and the softer light lines in `BodyScore`.
-    static let fullLengthTierALine: Float = 0.55
+    /// 0.60 since 20 Nov 2026 (0.55 on 19 Nov, 0.70 before): on 857 labelled photos 413 reach Tier A;
+    /// the page pre-selects the best Tier B front or side when a slot has no Tier A.
+    static let fullLengthTierALine: Float = 0.60
     static let fullLengthUsableFloor: Float = 0.45
     /// On, the outfit multipliers (`MuseScore.outfitMultiplier`) also apply to the body
     /// score. The tier stays the body's own; only the value and order move.

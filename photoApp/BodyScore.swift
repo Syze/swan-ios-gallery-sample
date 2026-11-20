@@ -70,6 +70,13 @@ struct BodyScore {
     static let sittingTorso: Float = 0.9
     /// Legs crossed: the ankles swap sides by more than this (torso lengths).
     static let crossedAnkles: Double = 0.15
+    /// On, the body is read with the torso at `fixedTorsoPixels` whatever the render size, so the mask,
+    /// outline and sharpness readings come out the same for the same photo. Off: read at the render.
+    static let fixedScaleEnabled = true
+    static let fixedTorsoPixels: Double = 400
+    /// Pixels sampled either side of the body's edge for the outline contrast. 3 reads the edge itself;
+    /// wider reads a band, which moves less when the mask edge shifts by a pixel.
+    static let outlineBand = 8
     /// Sharpness: Laplacian variance of luminance (0–1) over the body mask. Floored at `sharpnessFloor`,
     /// since plain clothes have little texture; under 0.4 × `bad` gates the photo as blurred.
     static let sharpness: (good: Double, bad: Double) = (0.003, 0.0005)
@@ -113,7 +120,15 @@ struct BodyScore {
     init?(image source: CGImage, orientation: CGImagePropertyOrientation, body: VNHumanBodyPoseObservation,
           face: CGRect?, originalScale: Double, caps: Caps? = nil, objects: [BodyObjects.Object] = []) {
         // Everything below works upright, as the joints are.
-        guard let image = Self.upright(source, orientation) else { return nil }
+        guard let upright = Self.upright(source, orientation) else { return nil }
+        // Fixed scale: the torso brought to `fixedTorsoPixels` before anything is read — see the constant.
+        var image = upright, originalScale = originalScale
+        if Self.fixedScaleEnabled, let neck = try? body.recognizedPoint(.neck), let root = try? body.recognizedPoint(.root),
+           neck.confidence >= 0.1, root.confidence >= 0.1 {
+            let torso = Double(hypot((neck.location.x - root.location.x) * CGFloat(upright.width), (neck.location.y - root.location.y) * CGFloat(upright.height)))
+            let s = torso > 1 ? Self.fixedTorsoPixels / torso : 1
+            if abs(s - 1) > 0.02, let scaled = Self.resampled(upright, by: s) { image = scaled; originalScale /= s }
+        }
         let w = image.width, h = image.height
         var rgba = [UInt8](repeating: 0, count: w * h * 4)
         guard let ctx = CGContext(data: &rgba, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
@@ -211,8 +226,8 @@ struct BodyScore {
         struct Run { var width: Double; var edge: Double; var light: Double; var skin: Double }
         func edgeAt(_ xi: Int, _ y: Int, _ dir: Int) -> Float {
             var inside: Float = 0, outside: Float = 0
-            for k in 0..<3 { inside += lum(xi - dir * k, y); outside += lum(xi + dir * (k + 1), y) }
-            return abs(inside - outside) / 3
+            for k in 0..<Self.outlineBand { inside += lum(xi - dir * k, y); outside += lum(xi + dir * (k + 1), y) }
+            return abs(inside - outside) / Float(Self.outlineBand)
         }
         func run(y: Int, cx: Int, minX: Int = 0, maxX: Int? = nil, cutArms: Bool) -> Run? {
             guard y >= 0, y < h, on(cx, y) else { return nil }
@@ -298,11 +313,11 @@ struct BodyScore {
             var light: Float = 0, skin = 0, n = 0
             for m in 0...k { let x = Int(Double(c.x) + nx * Double(m)), y = Int(Double(c.y) + ny * Double(m)); light += lum(x, y); if isSkin(x, y) { skin += 1 }; n += 1 }
             var ei: Float = 0, eo: Float = 0
-            for m in 0..<3 {
+            for m in 0..<Self.outlineBand {
                 ei += lum(Int(Double(c.x) + nx * Double(k - m)), Int(Double(c.y) + ny * Double(k - m)))
                 eo += lum(Int(Double(c.x) + nx * Double(k + m + 1)), Int(Double(c.y) + ny * Double(k + m + 1)))
             }
-            return Run(width: Double(2 * k + 1), edge: Double(abs(ei - eo) / 3), light: Double(light) / Double(max(n, 1)), skin: Double(skin) / Double(max(n, 1)))
+            return Run(width: Double(2 * k + 1), edge: Double(abs(ei - eo) / Float(Self.outlineBand)), light: Double(light) / Double(max(n, 1)), skin: Double(skin) / Double(max(n, 1)))
         }
         var armWidths: [Double] = [], armRuns: [Run] = []
         for (a, b) in [(lS, lE), (rS, rE), (lE, lW), (rE, rW)] {
@@ -444,11 +459,14 @@ struct BodyScore {
         readings["kneeDrop"] = kneeDrop; readings["thighTilt"] = thighTilt; readings["kneeAngle"] = kneeAngle; readings["torsoTilt"] = torsoTilt
         readings["sitting"] = sitting ? 1 : 0; readings["armsCrossed"] = armsCrossed ? 1 : 0; readings["handsHidden"] = handsHidden ? 1 : 0; readings["legsCrossed"] = legsCrossed ? 1 : 0
 
-        // Image quality: sharpness over the mask, and the body's height in the original.
+        // Image quality: sharpness over the mask, and the body's height in the original. Sharpness is
+        // read at the render, not the fixed scale, since resampling smooths or sharpens it.
         var lapSum = 0.0, lapSq = 0.0, ln = 0.0
-        for y in stride(from: 2, to: h - 2, by: 3) {
-            for x in stride(from: 2, to: w - 2, by: 3) where on(x, y) {
-                let l = 4 * lum(x, y) - lum(x - 1, y) - lum(x + 1, y) - lum(x, y - 1) - lum(x, y + 1)
+        let (sw, sh, slum): (Int, Int, (Int, Int) -> Float) = image === upright ? (w, h, lum)
+            : (Self.luminance(upright).map { (upright.width, upright.height, $0) } ?? (w, h, lum))
+        for y in stride(from: 2, to: sh - 2, by: 3) {
+            for x in stride(from: 2, to: sw - 2, by: 3) where on(x * w / sw, y * h / sh) {
+                let l = 4 * slum(x, y) - slum(x - 1, y) - slum(x + 1, y) - slum(x, y - 1) - slum(x, y + 1)
                 lapSum += Double(l); lapSq += Double(l * l); ln += 1
             }
         }
@@ -537,6 +555,30 @@ struct BodyScore {
     // MARK: - Helpers
 
     /// The image drawn upright, so pixel reads match the joints' normalised space.
+    /// A luminance reader (0–1, 0 outside) over the image's own pixels.
+    static func luminance(_ image: CGImage) -> ((Int, Int) -> Float)? {
+        let w = image.width, h = image.height
+        var rgba = [UInt8](repeating: 0, count: w * h * 4)
+        guard let ctx = CGContext(data: &rgba, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
+                                  space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        ctx.draw(image, in: CGRect(x: 0, y: 0, width: w, height: h))
+        return { x, y in
+            guard x >= 0, y >= 0, x < w, y < h else { return 0 }
+            let i = (y * w + x) * 4
+            return luma(Float(rgba[i]), Float(rgba[i + 1]), Float(rgba[i + 2])) / 255
+        }
+    }
+
+    /// The image drawn at `scale` times its size, smoothly.
+    static func resampled(_ image: CGImage, by scale: Double) -> CGImage? {
+        let w = max(1, Int((Double(image.width) * scale).rounded())), h = max(1, Int((Double(image.height) * scale).rounded()))
+        guard let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
+                                  space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        ctx.interpolationQuality = .high
+        ctx.draw(image, in: CGRect(x: 0, y: 0, width: w, height: h))
+        return ctx.makeImage()
+    }
+
     static func upright(_ image: CGImage, _ orientation: CGImagePropertyOrientation) -> CGImage? {
         if orientation == .up { return image }
         let w = image.width, h = image.height
