@@ -19,7 +19,7 @@ enum SwanEnvironment {
     var pageURL: URL {
         switch self {
         case .sandbox: return URL(string: "https://dhua7f26rck7x.cloudfront.net/v1.3.24/index.html")!
-        case .production: return URL(string: "https://swan-mobile-web-component.swan.so/v1.3.18/index.html")!
+        case .production: return URL(string: "https://swan-mobile-web-component.swan.so/v1.3.19/index.html")!
         }
     }
 

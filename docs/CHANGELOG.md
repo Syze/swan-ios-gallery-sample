@@ -22,9 +22,47 @@ onwards; those entries are kept for reference and need nothing on your side.
 
 ## [Unreleased]
 
-## [1.3.23] — 2026-11-20
+## [1.3.19] — 2026-11-20
+
+**Page and controller.** The controller update replaces `LibraryScan.swift`,
+`FaceVision.swift`, `BodyScore.swift`, `GallerySettings.swift`,
+`ScanReport.swift` and `ViewController.swift` in `native-samples/`.
+
+### Added
+
+- **A camera shot must be the shopper.** The controller compares the face in
+  a top-up photo with the selfie at the scan's match cut and refuses a stranger
+  as unusable, with the notice "not the person in the selfie". Behind
+  `captureIdentityCheck` in `GallerySettings.swift`; the Android sample does
+  the same.
+
+- **Page: knows which platform hosts it.** `config.platform` (`"ios"` or
+  `"android"`) names the host; without it the page reads the bridge the host
+  exposed (`webkit.messageHandlers.swanBridge` is iOS, `window.swanBridge` is
+  Android), then the user agent, and assumes iOS. The result is logged once as
+  `[swan/gallery] platform android (config)`. An existing iOS host needs no
+  change.
+- **Page: the platform goes to the Muse and to analytics.** The build request's
+  `requestSource` is the detected platform (`android` on an Android host; it was
+  always `ios`), and every gallery event carries a `platform` field.
+- **Page: Android permission guides.** Behind `PLATFORM_GUIDES`. On an Android
+  host the photo-access and camera-blocked pages use Android's words and
+  Settings path ("Open Settings › Apps › {appName} › Permissions", "Photos and
+  videos", "Allow all"), draw the Android permission screens, and show both
+  "Open Settings" and "Try again", since Android does not restart the app
+  after a permission change. Overridable per page through
+  `content.galleryPick.libraryBlockedPage` / `cameraBlockedPage`
+  (GALLERY_PICK_TEXT_CONFIG.md). iOS pages are unchanged.
+- **Page: `config.photoScheme`.** The URL scheme the host serves thumbnails on
+  (`<scheme>://thumb?id=…`), for a host that cannot register `swan-photo`.
+  Defaults to `swan-photo`; iOS hosts send nothing.
 
 ### Changed
+
+- **Mobile:** the options row (selfie, front, side bars) shows from the moment
+  the scan starts, with empty bars, not from the first match. A shopper whose
+  first match takes a while, as with an all-iCloud library, sees the same screen
+  as everyone else.
 
 - **Controller (sample):** the body score reads the person mask and the outline
   with the body at a fixed scale (torso 400 px) and the outline contrast over an
@@ -50,58 +88,6 @@ onwards; those entries are kept for reference and need nothing on your side.
   any pre-selected body (`PRESELECT_BODY_B_FALLBACK`). The pre-select floor
   follows the controller's Tier A line, now 0.60. Controller update: yes, the
   sample's `fullLengthTierALine` is 0.60.
-
-### Fixed
-
-- **Mobile:** the photo top-up camera asks for an upright 3:4 frame by width and
-  height (1440 by 1920), not by height alone: a square crops the head and feet,
-  and Android returned a square when only the height was asked. The selfie
-  camera stays square. <!-- reconstructed from the useCameraStream.ts diff on 20 Nov; check wording -->
-- **The grid no longer goes blank while the scan runs.** Fronts and sides stay
-  hidden until they are picked, so a scan whose first matches were bodies
-  showed a white grid over the progress line. The grid now draws skeleton
-  tiles until the first visible photo arrives (`SCAN_EMPTY_GRID_SKELETON`).
-
-## [1.3.22] — 2026-11-19
-
-**Page and controller.** The controller update replaces `LibraryScan.swift`,
-`FaceVision.swift`, `BodyScore.swift`, `GallerySettings.swift`,
-`ScanReport.swift` and `ViewController.swift` in `native-samples/`.
-
-### Fixed
-
-- **A camera selfie no longer sits in a padded tile.** The selfie stream is
-  square and grid tiles are 3:4, so a camera selfie showed grey bands above and
-  below. Camera-shot tiles now fill the tile (`is-capture`, display only); the
-  photo sent to the Muse is unchanged, and library photos still show whole.
-- **The loose-garment gate ignores the pose.** The torso rule now fires only
-  when the shopper stands upright with the arms clear of the chest: not sitting,
-  lying, leaning over 12°, arms crossed, or a wrist or elbow across the torso.
-  The legs rule gets the same guard at the 25° lean line, so a slightly tilted
-  person in a full skirt is still caught. Bending over a drawer, crouching,
-  sitting on a sofa or posing with raised arms used to read as a loose outfit;
-  on a labelled set of 784 photos, loose went from 103 to 34, and every photo
-  that stopped being loose was a pose, not clothing. `scoreInputs` gains
-  `torsoUpright`. No threshold changed.
-- **The search screen's count is visible on a phone.** "Looking through your
-  photos… 128 of 521" and its bar sat under nine placeholder tiles, below the
-  fold on most phones. They are pinned in the footer now, where the picker
-  shows the same count, so the two screens agree.
-- **No countdown for the selfie on the no-match camera.** The screen shown
-  when the scan finds nothing counted down by camera alone, so the selfie at
-  the end of the sequence got the 6 s timer meant for full-length shots. It now
-  follows the top-up rule: front and side count down on the front camera,
-  a selfie and any rear-camera shot are taken at once.
-
-### Added
-
-- **A camera shot must be the shopper.** The controller compares the face in
-  a top-up photo with the selfie at the scan's match cut and refuses a stranger
-  as unusable, with the notice "not the person in the selfie". Behind
-  `captureIdentityCheck` in `GallerySettings.swift`; the Android sample does
-  the same.
-
-### Changed
 
 - **More full-length photos are pre-selected.** Tier A for a front or side
   starts at 0.55 (was 0.70) and the page's pre-select floor follows. Head to
@@ -203,28 +189,49 @@ onwards; those entries are kept for reference and need nothing on your side.
   are now taken in the order the marker row shows: the selfie, then the two
   fronts, then the two sides. Before, the selfie came last.
 
-### Added
+### Fixed
 
-- **Page: knows which platform hosts it.** `config.platform` (`"ios"` or
-  `"android"`) names the host; without it the page reads the bridge the host
-  exposed (`webkit.messageHandlers.swanBridge` is iOS, `window.swanBridge` is
-  Android), then the user agent, and assumes iOS. The result is logged once as
-  `[swan/gallery] platform android (config)`. An existing iOS host needs no
-  change.
-- **Page: the platform goes to the Muse and to analytics.** The build request's
-  `requestSource` is the detected platform (`android` on an Android host; it was
-  always `ios`), and every gallery event carries a `platform` field.
-- **Page: Android permission guides.** Behind `PLATFORM_GUIDES`. On an Android
-  host the photo-access and camera-blocked pages use Android's words and
-  Settings path ("Open Settings › Apps › {appName} › Permissions", "Photos and
-  videos", "Allow all"), draw the Android permission screens, and show both
-  "Open Settings" and "Try again", since Android does not restart the app
-  after a permission change. Overridable per page through
-  `content.galleryPick.libraryBlockedPage` / `cameraBlockedPage`
-  (GALLERY_PICK_TEXT_CONFIG.md). iOS pages are unchanged.
-- **Page: `config.photoScheme`.** The URL scheme the host serves thumbnails on
-  (`<scheme>://thumb?id=…`), for a host that cannot register `swan-photo`.
-  Defaults to `swan-photo`; iOS hosts send nothing.
+- **Mobile:** the progress bar no longer sits full under "Still looking…" at the
+  end of a scan. Once every photo is counted (`205 of 205`) and the host is still
+  running its end-of-scan checks, the line reads "Checking the photos found…"
+  and the bar sweeps until scan complete (`SCAN_FINISHING_LINE`). New text key
+  `pickerPage.scanningFinishingText`. Controller update: no.
+- **Mobile:** right after the camera, before the first photo is counted, the
+  progress line reads "Preparing your photo library…" instead of "Still looking
+  for more photos of you…" with no count. New text key
+  `pickerPage.scanningPreparingText`. Controller update: no.
+
+- **Mobile:** the photo top-up camera asks for an upright 3:4 frame by width and
+  height (1440 by 1920), not by height alone: a square crops the head and feet,
+  and Android returned a square when only the height was asked. The selfie
+  camera stays square. <!-- reconstructed from the useCameraStream.ts diff on 20 Nov; check wording -->
+- **The grid no longer goes blank while the scan runs.** Fronts and sides stay
+  hidden until they are picked, so a scan whose first matches were bodies
+  showed a white grid over the progress line. The grid now draws skeleton
+  tiles until the first visible photo arrives (`SCAN_EMPTY_GRID_SKELETON`).
+
+- **A camera selfie no longer sits in a padded tile.** The selfie stream is
+  square and grid tiles are 3:4, so a camera selfie showed grey bands above and
+  below. Camera-shot tiles now fill the tile (`is-capture`, display only); the
+  photo sent to the Muse is unchanged, and library photos still show whole.
+- **The loose-garment gate ignores the pose.** The torso rule now fires only
+  when the shopper stands upright with the arms clear of the chest: not sitting,
+  lying, leaning over 12°, arms crossed, or a wrist or elbow across the torso.
+  The legs rule gets the same guard at the 25° lean line, so a slightly tilted
+  person in a full skirt is still caught. Bending over a drawer, crouching,
+  sitting on a sofa or posing with raised arms used to read as a loose outfit;
+  on a labelled set of 784 photos, loose went from 103 to 34, and every photo
+  that stopped being loose was a pose, not clothing. `scoreInputs` gains
+  `torsoUpright`. No threshold changed.
+- **The search screen's count is visible on a phone.** "Looking through your
+  photos… 128 of 521" and its bar sat under nine placeholder tiles, below the
+  fold on most phones. They are pinned in the footer now, where the picker
+  shows the same count, so the two screens agree.
+- **No countdown for the selfie on the no-match camera.** The screen shown
+  when the scan finds nothing counted down by camera alone, so the selfie at
+  the end of the sequence got the 6 s timer meant for full-length shots. It now
+  follows the top-up rule: front and side count down on the front camera,
+  a selfie and any rear-camera shot are taken at once.
 
 ---
 
