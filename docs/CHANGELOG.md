@@ -22,6 +22,17 @@ onwards; those entries are kept for reference and need nothing on your side.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Body score: a body could be blown up many times over.** The fixed-scale
+  reading enlarges the photo until the torso is 400 px, with no upper limit, so
+  a person tiny in the frame or a pose read with its joints bunched made one
+  photo 49 MP (about 390 MB at once on a Samsung) and risked an out-of-memory
+  crash. The enlarged photo is now capped at 24 MP (`fixedScaleMaxMegapixels` in
+  `BodyScore.swift` and `BodyScore.kt`); on 1,021 labelled photos no score, tier
+  or verdict changes. Android also copies only the body area into memory
+  (`fixedScaleBodyOnly`), with the same readings on 381 bodies.
+
 ## [1.3.19] — 2026-11-20
 
 **Page and controller.** The controller update replaces `LibraryScan.swift`,

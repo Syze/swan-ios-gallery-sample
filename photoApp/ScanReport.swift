@@ -136,6 +136,10 @@ final class ScanReport {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        // The product token names the platform and build (Android sends "photoApp/android/<build>"):
+        // the ingest lists it as `client` and filters by it.
+        let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "0"
+        request.setValue("photoApp/ios/\(build)", forHTTPHeaderField: "User-Agent")
         if let key { request.setValue(key, forHTTPHeaderField: "x-api-key") }
         if gzip, let packed = Self.gzip(json) {
             request.setValue("gzip", forHTTPHeaderField: "Content-Encoding")
