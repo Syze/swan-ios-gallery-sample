@@ -74,6 +74,9 @@ struct BodyScore {
     /// outline and sharpness readings come out the same for the same photo. Off: read at the render.
     static let fixedScaleEnabled = true
     static let fixedTorsoPixels: Double = 400
+    /// The largest the enlarged photo may be, in megapixels. Only a person tiny in the frame or a pose read with its
+    /// joints bunched reaches it; without it such a photo is blown up many times over (one read 49 MP on a phone).
+    static let fixedScaleMaxMegapixels: Double = 24
     /// Pixels sampled either side of the body's edge for the outline contrast. 3 reads the edge itself;
     /// wider reads a band, which moves less when the mask edge shifts by a pixel.
     static let outlineBand = 8
@@ -126,7 +129,8 @@ struct BodyScore {
         if Self.fixedScaleEnabled, let neck = try? body.recognizedPoint(.neck), let root = try? body.recognizedPoint(.root),
            neck.confidence >= 0.1, root.confidence >= 0.1 {
             let torso = Double(hypot((neck.location.x - root.location.x) * CGFloat(upright.width), (neck.location.y - root.location.y) * CGFloat(upright.height)))
-            let s = torso > 1 ? Self.fixedTorsoPixels / torso : 1
+            let fit = (Self.fixedScaleMaxMegapixels * 1_000_000 / Double(upright.width * upright.height)).squareRoot()
+            let s = torso > 1 ? min(fit, Self.fixedTorsoPixels / torso) : 1
             if abs(s - 1) > 0.02, let scaled = Self.resampled(upright, by: s) { image = scaled; originalScale /= s }
         }
         let w = image.width, h = image.height
