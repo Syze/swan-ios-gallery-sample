@@ -635,7 +635,7 @@ token server.
 | `onGalleryFullImage` | `{ id, dataURI, original, hasVideo? }` or `{ id, error }` |
 | `onGalleryThumbnails` | `{ thumbs: [{ id, dataURI }] }` |
 | `onGalleryPickedMore` | `{ added }` — only when the user actually shared more |
-| `onGalleryScanReportStored` | `{ id, photos }` — sandbox builds only, after Swan's scan ingest stored the scan report; the page records it as the PostHog event `<shopDomain>/gallery/scan_report_stored` and nothing else |
+| `onGalleryScanReportStored` | `{ id, photos }` — after Swan's scan ingest stored the scan report (builds whose `SwanEnvironment` posts one); the page records it as the PostHog event `<shopDomain>/gallery/scan_report_stored` and nothing else |
 
 ### `onGalleryPhotoAnalysis` — read this one carefully
 
@@ -1220,8 +1220,8 @@ Older controllers keep working.
 
 **Setup**
 
-- `onGalleryScanReportStored { id, photos }`: sent by a sandbox build once
-  Swan's scan ingest has stored its scan report. The page records it as the
+- `onGalleryScanReportStored { id, photos }`: sent once Swan's scan ingest has
+  stored the scan report (builds whose `SwanEnvironment` posts one). The page records it as the
   PostHog event `<shopDomain>/gallery/scan_report_stored` with the user's
   email and run id. See the table above.
 

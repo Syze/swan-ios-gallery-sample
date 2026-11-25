@@ -22,6 +22,18 @@ onwards; those entries are kept for reference and need nothing on your side.
 
 ## [Unreleased]
 
+### Changed
+
+- **Controller (iOS and Android samples): production builds now post the scan
+  report too.** Both environments post to the one ingest; the report's
+  User-Agent product token gains the environment as its last segment,
+  `photoApp/ios/<build>/<env>` and `photoApp/android/<build>/<env>` (`sandbox`
+  or `production`), and the telemetry page lists it as `Env` and filters by it
+  (`?env=`). Reports from earlier builds count as sandbox. The ingest key now
+  ships in production builds as well; return nil (iOS) or null (Android) from
+  `SwanEnvironment` to turn reports off for a build. Controller update: yes,
+  `SwanEnvironment.swift` and `ScanReport.swift` (and `.kt`).
+
 ### Fixed
 
 - **Body score: a body could be blown up many times over.** The fixed-scale

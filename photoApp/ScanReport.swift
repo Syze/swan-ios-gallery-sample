@@ -6,8 +6,7 @@ import UIKit
 /// Main queue only. Off while `url` is nil.
 final class ScanReport {
 
-    /// Where each report is posted, and its ingest key: set for sandbox builds, nil in production
-    /// (see `SwanEnvironment`).
+    /// Where each report is posted, and its ingest key; nil turns reports off (see `SwanEnvironment`).
     static let url = SwanEnvironment.current.scanReport?.url
     static let key = SwanEnvironment.current.scanReport?.key
     /// Tries per report: retried on 5xx and network errors, never on other 4xx.
@@ -136,10 +135,10 @@ final class ScanReport {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        // The product token names the platform and build (Android sends "photoApp/android/<build>"):
-        // the ingest lists it as `client` and filters by it.
+        // The product token names the platform, build and environment (Android sends
+        // "photoApp/android/<build>/<env>"): the ingest lists it as `client` and filters by it.
         let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "0"
-        request.setValue("photoApp/ios/\(build)", forHTTPHeaderField: "User-Agent")
+        request.setValue("photoApp/ios/\(build)/\(SwanEnvironment.current.reportEnvironment)", forHTTPHeaderField: "User-Agent")
         if let key { request.setValue(key, forHTTPHeaderField: "x-api-key") }
         if gzip, let packed = Self.gzip(json) {
             request.setValue("gzip", forHTTPHeaderField: "Content-Encoding")

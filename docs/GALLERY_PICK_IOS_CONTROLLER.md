@@ -19,7 +19,7 @@ All of them are in `native-samples/`. The Podfile names the sample target
 | `GalleryPhotos.swift` | Serves photos to the page: thumbnails, originals, captures, analysis. A camera shot is judged as the scan would, and must be the shopper in the selfie (`captureIdentityCheck`, `GallerySettings.swift`). |
 | `Helpers.swift` | Small shared helpers. |
 | `SwanEnvironment.swift` | The values that differ between a sandbox and a production build: page URL, session URL, key, scan report. |
-| `ScanReport.swift` | Posts a JSON report of each scan in sandbox builds; off in production. |
+| `ScanReport.swift` | Posts a JSON report of each scan to Swan's scan ingest; `SwanEnvironment` turns it off. |
 | `FaceRecognition.swift` | Runs the face recognition model and compares faces. |
 | `FaceExpression.swift` | Reads facial expression (smile, blink, brows, eyes, iris size) from a face crop. |
 | `FaceCover.swift` | Reads what covers a selfie's face (hairline band, jaw band, face oval) from a face crop. |
@@ -181,11 +181,11 @@ dropped. Verdicts and face embeddings stay on the phone between scans, in the
 app's private folder described above; everything else exists only in memory
 during the scan.
 
-## Scan report, sandbox builds only
+## Scan report
 
 | Setting | Sandbox | Production | What it does when set |
 |---|---|---|---|
-| `scanReport` in `SwanEnvironment.swift` | set | nil | Posts one JSON report per scan to Swan's scan ingest (`devphotoingest.api.swanvision.ai`, with its ingest key, gzipped, retried on server and network errors): each match with its score and readings, the withdrawn matches and why, the end-of-scan checks (usual eye openness, usual sharpness, gaze resting point), the page's picks, the scan summary and the phone model. Photo ids are cut to 8 characters, except `dupGroup`, which carries the full photo identifier. No images, face embeddings or tokens; the signed-in email goes along as `account`, which the ingest lists scans by (`GET /v1/scans?account=<email>`, or the Account box on its page); it does hold each photo's face and body measurements (`scoreInputs`) and capture time, so treat it as personal data. |
+| `scanReport` in `SwanEnvironment.swift` | set | set (nil turns it off) | Posts one JSON report per scan to Swan's scan ingest (`devphotoingest.api.swanvision.ai`, with its ingest key, gzipped, retried on server and network errors): each match with its score and readings, the withdrawn matches and why, the end-of-scan checks (usual eye openness, usual sharpness, gaze resting point), the page's picks, the scan summary and the phone model. Photo ids are cut to 8 characters, except `dupGroup`, which carries the full photo identifier. No images, face embeddings or tokens; the signed-in email goes along as `account`, which the ingest lists scans by (`GET /v1/scans?account=<email>`, or the Account box on its page); the User-Agent `photoApp/ios/<build>/<env>` tells the ingest the build and whether it was a sandbox or production one (`?env=`); it does hold each photo's face and body measurements (`scoreInputs`) and capture time, so treat it as personal data. |
 
 The console shows errors only: a missing model file, the page not loading,
 a photo that could not be read or served, the results store not saving. One

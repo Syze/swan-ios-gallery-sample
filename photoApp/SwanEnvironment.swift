@@ -19,7 +19,7 @@ enum SwanEnvironment {
     var pageURL: URL {
         switch self {
         case .sandbox: return URL(string: "https://dhua7f26rck7x.cloudfront.net/v1.3.24/index.html")!
-        case .production: return URL(string: "https://swan-mobile-web-component.swan.so/v1.3.19/index.html")!
+        case .production: return URL(string: "https://swan-mobile-web-component.swan.so/v1.3.20/index.html")!
         }
     }
 
@@ -46,13 +46,17 @@ enum SwanEnvironment {
         }
     }
 
-    /// Where each scan's JSON report is posted, and the ingest key (see `ScanReport`). Sandbox
-    /// builds only. The key ships inside the app; it keeps out casual traffic and nothing more.
+    /// Where each scan's JSON report is posted, and the ingest key (see `ScanReport`). Both builds
+    /// post to the one ingest; the report's User-Agent names the environment so the ingest can tell
+    /// them apart. The key ships inside the app; it keeps out casual traffic and nothing more.
+    /// Return nil to turn reports off for a build.
     var scanReport: (url: URL, key: String)? {
         switch self {
-        case .sandbox: return (URL(string: "https://devphotoingest.api.swanvision.ai/v1/scans")!,
-                               "a1e5074c29a3c3da344212996765c566e30c7b99cd0a6e81")
-        case .production: return nil
+        case .sandbox, .production: return (URL(string: "https://devphotoingest.api.swanvision.ai/v1/scans")!,
+                                            "a1e5074c29a3c3da344212996765c566e30c7b99cd0a6e81")
         }
     }
+
+    /// The environment segment of the report's User-Agent: "photoApp/ios/<build>/<env>".
+    var reportEnvironment: String { self == .sandbox ? "sandbox" : "production" }
 }
